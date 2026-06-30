@@ -26,7 +26,9 @@ RUN cat <<EOF > /tmp/extra-nix.conf
 extra-experimental-features = nix-command flakes
 extra-substituters = https://nix-postgres-artifacts.s3.amazonaws.com
 extra-trusted-public-keys = nix-postgres-artifacts:dGZlQOvKcNEjvT7QEAJbcV6b6uk7VF/hWMjhYleiaLI=
+filter-syscalls = false
 EOF
+ENV NIX_CONFIG="filter-syscalls = false"
 RUN curl -L https://releases.nixos.org/nix/nix-2.34.6/install | sh -s -- --daemon --no-channel-add --yes --nix-extra-conf-file /tmp/extra-nix.conf
 ENV PATH="${PATH}:/nix/var/nix/profiles/default/bin"
 RUN nix --version
@@ -152,7 +154,8 @@ RUN sed -i \
 # Remove timescaledb and plv8 references (not in pg17)
 RUN sed -i 's/ timescaledb,//g;' "/etc/postgresql/postgresql.conf" && \
     sed -i 's/db_user_namespace = off/#db_user_namespace = off/g;' "/etc/postgresql/postgresql.conf" && \
-    sed -i 's/ timescaledb,//g; s/ plv8,//g' "/etc/postgresql-custom/supautils.conf"
+    sed -i 's/ timescaledb,//g; s/ plv8,//g' "/etc/postgresql-custom/supautils.conf" && \
+    sed -i 's/\(shared_preload_libraries.*\)'\''\(.*\)$/\1, pg_durable'\''\2/' "/etc/postgresql/postgresql.conf"
 
 # Include schema migrations
 COPY migrations/db /docker-entrypoint-initdb.d/
