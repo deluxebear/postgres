@@ -84,7 +84,7 @@ jobs:
   build:
     name: Build ${{ matrix.flavor }} from ${{ matrix.upstream_ref }}
     needs: discover
-    runs-on: large-linux-x86
+    runs-on: ubuntu-latest
     timeout-minutes: 180
     strategy:
       fail-fast: false
