@@ -279,65 +279,139 @@ jobs:
             "${image_repo}:${version_tag}-arm64"
 
   release:
-    name: Publish GitHub release
+    name: Publish GitHub release ${{ matrix.release.flavor }}
     needs:
       - discover
       - merge_manifest
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_docker }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ${{ fromJson(needs.discover.outputs.matrix).include }}
     steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          path: .workflow
+
+      - name: Checkout upstream release
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          repository: supabase/postgres
+          ref: ${{ matrix.release.upstream_ref }}
+          path: upstream
+
+      - name: Create patched source tag
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          upstream_sha="$(git -C upstream rev-parse HEAD)"
+          release_tag="${{ matrix.release.upstream_ref }}"
+          version_tag="${release_tag#v}"
+          source_tag="custom-postgres-${version_tag}"
+
+          patch_paths=(
+            Dockerfile-17
+            Dockerfile-multigres
+            Dockerfile-orioledb-17
+            ansible/tasks/stage2-setup-postgres.yml
+            docker/pgctld/orioledb-postgresql.conf.tmpl
+            docker/pgctld/postgresql.conf.tmpl
+            nix/checks.nix
+            nix/ext/pg_durable.nix
+            nix/packages/postgres.nix
+            nix/tests/expected/z_17_ext_interface.out
+            nix/tests/expected/z_multigres-17_ext_interface.out
+            nix/tests/expected/z_multigres-orioledb-17_ext_interface.out
+            nix/tests/expected/z_orioledb-17_ext_interface.out
+            nix/tests/sql/z_17_ext_interface.sql
+            nix/tests/sql/z_multigres-17_ext_interface.sql
+            nix/tests/sql/z_multigres-orioledb-17_ext_interface.sql
+            nix/tests/sql/z_orioledb-17_ext_interface.sql
+            nix/tools/run-server.sh.in
+          )
+
+          git -C .workflow fetch --no-tags --depth=1 \
+            https://github.com/supabase/postgres.git \
+            "refs/tags/${{ matrix.release.upstream_ref }}:refs/tags/${{ matrix.release.upstream_ref }}"
+
+          git -C .workflow diff --binary "${{ matrix.release.upstream_ref }}" HEAD -- "${patch_paths[@]}" > pg_durable.patch
+
+          if [ ! -s pg_durable.patch ]; then
+            echo "No pg_durable patch was generated. Current branch may not contain pg_durable changes." >&2
+            exit 1
+          fi
+
+          git -C upstream apply --3way ../pg_durable.patch
+          git -C upstream diff --check
+
+          git -C upstream config user.name "github-actions[bot]"
+          git -C upstream config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C upstream add -A
+          git -C upstream commit \
+            -m "Apply custom pg_durable changes to ${{ matrix.release.upstream_ref }}" \
+            -m "Upstream: supabase/postgres@${upstream_sha}" \
+            -m "Customization source: ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
+
+          source_sha="$(git -C upstream rev-parse HEAD)"
+          git -C upstream tag -f "$source_tag" "$source_sha"
+          git -C upstream push \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "+refs/tags/${source_tag}:refs/tags/${source_tag}"
+
+          {
+            echo "source_sha=${source_sha}"
+            echo "source_tag=${source_tag}"
+            echo "upstream_sha=${upstream_sha}"
+            echo "version_tag=${version_tag}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create release notes
         id: notes
         env:
-          MATRIX: ${{ needs.discover.outputs.matrix }}
           DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
           DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
         run: |
           set -euo pipefail
 
           image_repo="${DOCKERHUB_REPOSITORY:-${DOCKER_USERNAME}/postgres}"
-          standard_ref="$(jq -r '.include[] | select(.flavor == "17") | .upstream_ref' <<< "$MATRIX" | head -n1)"
-          orioledb_ref="$(jq -r '.include[] | select(.flavor == "orioledb-17") | .upstream_ref' <<< "$MATRIX" | head -n1)"
-
-          standard_tag="${standard_ref#v}"
-          orioledb_tag="${orioledb_ref#v}"
-          release_tag="custom-postgres-${standard_tag}"
-          if [ -n "$orioledb_tag" ] && [ "$orioledb_tag" != "null" ]; then
-            release_tag="${release_tag}-orioledb-${orioledb_tag%-orioledb}"
-          fi
+          version_tag="${{ steps.source.outputs.version_tag }}"
+          floating_tag="${{ matrix.release.flavor }}"
 
           {
-            echo "Custom PostgreSQL 17 build based on Supabase upstream releases."
+            echo "Custom PostgreSQL build based on Supabase upstream release \`${{ matrix.release.upstream_ref }}\`."
             echo
-            echo "This build includes the custom extension set from this branch."
+            echo "This release tag points to a commit created by applying the custom extension patch onto the upstream release source tree."
             echo
-            echo "## Docker images"
+            echo "## Source"
             echo
-            jq -c '.include[]' <<< "$MATRIX" | while read -r item; do
-              flavor="$(jq -r '.flavor' <<< "$item")"
-              upstream_ref="$(jq -r '.upstream_ref' <<< "$item")"
-              release_name="$(jq -r '.release_name // .upstream_ref' <<< "$item")"
-              version_tag="${upstream_ref#v}"
-              floating_tag="${flavor}"
-
-              echo "### ${flavor}"
-              echo
-              echo "- Upstream release: ${upstream_ref} (${release_name})"
-              echo "- Docker Hub image: https://hub.docker.com/r/${image_repo}/tags?name=${version_tag}"
-              echo "- Version pull: \`docker pull ${image_repo}:${version_tag}\`"
-              echo "- Floating Docker Hub image: https://hub.docker.com/r/${image_repo}/tags?name=${floating_tag}"
-              echo "- Floating pull: \`docker pull ${image_repo}:${floating_tag}\`"
-              echo
-            done
+            echo "- Upstream release: \`${{ matrix.release.upstream_ref }}\` (${{ matrix.release.release_name }})"
+            echo "- Upstream commit: \`${{ steps.source.outputs.upstream_sha }}\`"
+            echo "- Patched source commit: \`${{ steps.source.outputs.source_sha }}\`"
+            echo "- Custom source tag: \`${{ steps.source.outputs.source_tag }}\`"
+            echo
+            echo "## Docker image"
+            echo
+            echo "- Docker Hub image: https://hub.docker.com/r/${image_repo}/tags?name=${version_tag}"
+            echo "- Version pull: \`docker pull ${image_repo}:${version_tag}\`"
+            echo "- Floating Docker Hub image: https://hub.docker.com/r/${image_repo}/tags?name=${floating_tag}"
+            echo "- Floating pull: \`docker pull ${image_repo}:${floating_tag}\`"
+            echo
+            echo "## Architecture tags"
+            echo
+            echo "- \`${image_repo}:${version_tag}-amd64\`"
+            echo "- \`${image_repo}:${version_tag}-arm64\`"
           } > release-notes.md
 
-          title="Custom PostgreSQL 17 ${standard_tag}"
-          if [ -n "$orioledb_tag" ] && [ "$orioledb_tag" != "null" ]; then
-            title="${title} / OrioleDB ${orioledb_tag}"
-          fi
-
-          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
-          echo "title=${title}" >> "$GITHUB_OUTPUT"
+          title="Custom PostgreSQL ${{ matrix.release.flavor }} ${version_tag}"
+          {
+            echo "release_tag=${{ steps.source.outputs.source_tag }}"
+            echo "title=${title}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Publish release
         env:
@@ -354,7 +428,6 @@ jobs:
               --notes-file release-notes.md
           else
             gh release create "$RELEASE_TAG" \
-              --target "$GITHUB_SHA" \
               --title "$RELEASE_TITLE" \
               --notes-file release-notes.md \
               --latest=false
