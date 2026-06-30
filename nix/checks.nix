@@ -135,6 +135,7 @@
                   "plan_filter"
                   "supabase_vault"
                   "supautils"
+                  "pg_durable"
                 )
 
                 # Extract available extensions from receipt

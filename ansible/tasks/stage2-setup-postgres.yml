@@ -34,6 +34,12 @@
             regexp: 'db_user_namespace\ =\ off'
             replace: '#db_user_namespace\ =\ off'
 
+        - name: Append pg_durable to shared_preload_libraries for PostgreSQL 17 builds
+          ansible.builtin.replace:
+            path: '/etc/postgresql/postgresql.conf'
+            regexp: "(shared_preload_libraries).*(\\'.*)\\'"
+            replace: "\\1 = \\2, pg_durable'"
+
     - name: Execute things when is_psql_oriole and stage2_nix
       become: true
       when:

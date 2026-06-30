@@ -1,0 +1,197 @@
+name: Build Upstream PG17 Release with pg_durable
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_docker:
+        description: "Also build the matching Docker image locally"
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "20 2 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    name: Discover upstream PG17 releases
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.releases.outputs.matrix }}
+    steps:
+      - name: Select latest non-test PG17 releases
+        id: releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          releases_json="$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/supabase/postgres/releases?per_page=100")"
+
+          matrix="$(jq -c '
+            def release_text: ((.tag_name // "") + " " + (.name // ""));
+            def stable: (.draft | not) and (.prerelease | not);
+            def no_test: (release_text | test("test"; "i") | not);
+            def server_pg17: (.tag_name | test("^v?17[.][0-9]+[.][0-9]+[.][0-9]+$"));
+            def server_orioledb17: (.tag_name | test("^v?17[.][0-9]+[.][0-9]+[.][0-9]+-orioledb$"));
+
+            {
+              include: [
+                ([
+                  .[]
+                  | select(stable and no_test and server_pg17)
+                ][0] | {
+                  flavor: "17",
+                  upstream_ref: .tag_name,
+                  release_name: .name,
+                  package_attr: ".#psql_17/bin",
+                  dockerfile: "Dockerfile-17",
+                  docker_target: ""
+                }),
+                ([
+                  .[]
+                  | select(stable and no_test and server_orioledb17)
+                ][0] | {
+                  flavor: "orioledb-17",
+                  upstream_ref: .tag_name,
+                  release_name: .name,
+                  package_attr: ".#psql_orioledb-17/bin",
+                  dockerfile: "Dockerfile-orioledb-17",
+                  docker_target: ""
+                })
+              ]
+              | map(select(.upstream_ref != null))
+            }
+          ' <<< "$releases_json")"
+
+          if [ "$(jq '.include | length' <<< "$matrix")" -eq 0 ]; then
+            echo "No matching upstream PG17 releases found" >&2
+            exit 1
+          fi
+
+          echo "Selected releases:"
+          jq -r '.include[] | "- \(.flavor): \(.upstream_ref) (\(.release_name))"' <<< "$matrix"
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.flavor }} from ${{ matrix.upstream_ref }}
+    needs: discover
+    runs-on: large-linux-x86
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          path: .workflow
+
+      - name: Checkout upstream release
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          repository: supabase/postgres
+          ref: ${{ matrix.upstream_ref }}
+          path: upstream
+
+      - name: Apply pg_durable changes onto upstream release
+        run: |
+          set -euo pipefail
+
+          upstream_sha="$(git -C upstream rev-parse HEAD)"
+          echo "::notice title=Upstream release::${{ matrix.upstream_ref }} -> ${upstream_sha}"
+
+          patch_paths=(
+            Dockerfile-17
+            Dockerfile-multigres
+            Dockerfile-orioledb-17
+            ansible/tasks/stage2-setup-postgres.yml
+            docker/pgctld/orioledb-postgresql.conf.tmpl
+            docker/pgctld/postgresql.conf.tmpl
+            nix/checks.nix
+            nix/ext/pg_durable.nix
+            nix/packages/postgres.nix
+            nix/tests/expected/z_17_ext_interface.out
+            nix/tests/expected/z_multigres-17_ext_interface.out
+            nix/tests/expected/z_multigres-orioledb-17_ext_interface.out
+            nix/tests/expected/z_orioledb-17_ext_interface.out
+            nix/tests/sql/z_17_ext_interface.sql
+            nix/tests/sql/z_multigres-17_ext_interface.sql
+            nix/tests/sql/z_multigres-orioledb-17_ext_interface.sql
+            nix/tests/sql/z_orioledb-17_ext_interface.sql
+            nix/tools/run-server.sh.in
+          )
+
+          git -C .workflow fetch --no-tags --depth=1 \
+            https://github.com/supabase/postgres.git \
+            "refs/tags/${{ matrix.upstream_ref }}:refs/tags/${{ matrix.upstream_ref }}"
+
+          git -C .workflow diff --binary "${{ matrix.upstream_ref }}" HEAD -- "${patch_paths[@]}" > pg_durable.patch
+
+          if [ ! -s pg_durable.patch ]; then
+            echo "No pg_durable patch was generated. Current branch may not contain pg_durable changes." >&2
+            exit 1
+          fi
+
+          git -C upstream apply --3way ../pg_durable.patch
+          git -C upstream diff --check
+
+          test -f upstream/nix/ext/pg_durable.nix
+          grep -R "pg_durable" upstream/nix/packages/postgres.nix upstream/nix/ext/pg_durable.nix
+
+      - name: Install Nix
+        uses: ./.workflow/.github/actions/nix-install-ephemeral
+
+      - name: Build Nix package
+        working-directory: upstream
+        run: |
+          set -uo pipefail
+
+          log_file="$(mktemp)"
+          trap 'rm -f "$log_file"' EXIT
+
+          transient_re='HTTP error 5[0-9][0-9]|error: unable to download|Failed to open archive|Connection (reset|refused|timed out)|Couldn'\''t resolve host|Could not resolve host|unexpected end[- ]of[- ]file|SSL connection|TLS connection|Resource temporarily unavailable|Temporary failure in name resolution'
+
+          delay=30
+          for attempt in 1 2 3; do
+            echo "::group::nix build attempt ${attempt}/3: ${{ matrix.package_attr }}"
+            nix build --accept-flake-config -L "${{ matrix.package_attr }}" 2>&1 | tee "$log_file"
+            rc=${PIPESTATUS[0]}
+            echo "::endgroup::"
+
+            if [ "$rc" -eq 0 ]; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              exit "$rc"
+            fi
+
+            if grep -qE "$transient_re" "$log_file"; then
+              sleep "$delay"
+              delay=$((delay * 2))
+            else
+              exit "$rc"
+            fi
+          done
+
+      - name: Build Docker image
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_docker }}
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          target_arg=()
+          if [ -n "${{ matrix.docker_target }}" ]; then
+            target_arg=(--target "${{ matrix.docker_target }}")
+          fi
+
+          docker build \
+            -f "${{ matrix.dockerfile }}" \
+            "${target_arg[@]}" \
+            -t "supabase-postgres-upstream:${{ matrix.flavor }}-${{ matrix.upstream_ref }}" \
+            .
