@@ -312,7 +312,7 @@ jobs:
           upstream_sha="$(git -C upstream rev-parse HEAD)"
           release_tag="${{ matrix.release.upstream_ref }}"
           version_tag="${release_tag#v}"
-          source_tag="custom-postgres-${version_tag}"
+          source_tag="postgres-${version_tag}"
 
           patch_paths=(
             Dockerfile-17
@@ -353,9 +353,9 @@ jobs:
           git -C upstream config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git -C upstream add -A
           git -C upstream commit \
-            -m "Apply custom pg_durable changes to ${{ matrix.release.upstream_ref }}" \
+            -m "Apply pg_durable changes to ${{ matrix.release.upstream_ref }}" \
             -m "Upstream: supabase/postgres@${upstream_sha}" \
-            -m "Customization source: ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
+            -m "Extension source: ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
 
           source_sha="$(git -C upstream rev-parse HEAD)"
           git -C upstream tag -f "$source_tag" "$source_sha"
@@ -383,16 +383,16 @@ jobs:
           floating_tag="${{ matrix.release.flavor }}"
 
           {
-            echo "Custom PostgreSQL build based on Supabase upstream release \`${{ matrix.release.upstream_ref }}\`."
+            echo "PostgreSQL build based on Supabase upstream release \`${{ matrix.release.upstream_ref }}\`."
             echo
-            echo "This release tag points to a commit created by applying the custom extension patch onto the upstream release source tree."
+            echo "This release tag points to a commit created by applying the extension patch onto the upstream release source tree."
             echo
             echo "## Source"
             echo
             echo "- Upstream release: \`${{ matrix.release.upstream_ref }}\` (${{ matrix.release.release_name }})"
             echo "- Upstream commit: \`${{ steps.source.outputs.upstream_sha }}\`"
             echo "- Patched source commit: \`${{ steps.source.outputs.source_sha }}\`"
-            echo "- Custom source tag: \`${{ steps.source.outputs.source_tag }}\`"
+            echo "- Source tag: \`${{ steps.source.outputs.source_tag }}\`"
             echo
             echo "## Docker image"
             echo
@@ -407,7 +407,7 @@ jobs:
             echo "- \`${image_repo}:${version_tag}-arm64\`"
           } > release-notes.md
 
-          title="Custom PostgreSQL ${{ matrix.release.flavor }} ${version_tag}"
+          title="PostgreSQL ${{ matrix.release.flavor }} ${version_tag}"
           {
             echo "release_tag=${{ steps.source.outputs.source_tag }}"
             echo "title=${title}"
