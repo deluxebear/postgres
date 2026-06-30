@@ -7,14 +7,15 @@ on:
   workflow_dispatch:
     inputs:
       build_docker:
-        description: "Also build the matching Docker image locally"
+        description: "Build and push the matching multi-arch Docker image"
         required: false
-        default: false
+        default: true
         type: boolean
   schedule:
     - cron: "20 2 * * *"
 
 permissions:
+  actions: write
   contents: read
 
 jobs:
@@ -85,7 +86,7 @@ jobs:
     name: Build ${{ matrix.flavor }} from ${{ matrix.upstream_ref }}
     needs: discover
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
@@ -183,9 +184,27 @@ jobs:
             fi
           done
 
-      - name: Build Docker image
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.build_docker) }}
+      - name: Set up QEMU
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_docker }}
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_docker }}
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Login to Docker Hub
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_docker }}
+        uses: docker/login-action@465a07811f14bebb1938fbed4728c6a1ff8901fc # v2.2.0
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push multi-arch Docker image
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_docker }}
         working-directory: upstream
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
         run: |
           set -euo pipefail
           target_arg=()
@@ -193,8 +212,23 @@ jobs:
             target_arg=(--target "${{ matrix.docker_target }}")
           fi
 
-          docker build \
+          image_repo="${DOCKERHUB_REPOSITORY:-${DOCKER_USERNAME}/postgres}"
+          release_tag="${{ matrix.upstream_ref }}"
+          release_tag="${release_tag#v}"
+          version_tag="${release_tag}-pg-durable"
+          floating_tag="${{ matrix.flavor }}-pg-durable"
+
+          echo "Pushing Docker image:"
+          echo "  ${image_repo}:${version_tag}"
+          echo "  ${image_repo}:${floating_tag}"
+
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
             -f "${{ matrix.dockerfile }}" \
             "${target_arg[@]}" \
-            -t "supabase-postgres-upstream:${{ matrix.flavor }}-${{ matrix.upstream_ref }}" \
+            -t "${image_repo}:${version_tag}" \
+            -t "${image_repo}:${floating_tag}" \
+            --cache-from "type=gha,scope=pg-durable-${{ matrix.flavor }}" \
+            --cache-to "type=gha,mode=max,scope=pg-durable-${{ matrix.flavor }}" \
+            --push \
             .
