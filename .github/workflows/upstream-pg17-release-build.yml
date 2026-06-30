@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       build_docker:
-        description: "Build and push the matching multi-arch Docker image"
+        description: "Build and push matching Docker images, then publish a GitHub release"
         required: false
         default: true
         type: boolean
@@ -16,7 +16,7 @@ on:
 
 permissions:
   actions: write
-  contents: read
+  contents: write
 
 jobs:
   discover:
@@ -83,13 +83,17 @@ jobs:
           echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build ${{ matrix.flavor }} from ${{ matrix.upstream_ref }}
+    name: Build ${{ matrix.release.flavor }} ${{ matrix.arch }} from ${{ matrix.release.upstream_ref }}
     needs: discover
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     timeout-minutes: 360
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+      matrix:
+        release: ${{ fromJson(needs.discover.outputs.matrix).include }}
+        arch:
+          - amd64
+          - arm64
     steps:
       - name: Checkout workflow repository
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
@@ -100,7 +104,7 @@ jobs:
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           repository: supabase/postgres
-          ref: ${{ matrix.upstream_ref }}
+          ref: ${{ matrix.release.upstream_ref }}
           path: upstream
 
       - name: Apply pg_durable changes onto upstream release
@@ -108,7 +112,7 @@ jobs:
           set -euo pipefail
 
           upstream_sha="$(git -C upstream rev-parse HEAD)"
-          echo "::notice title=Upstream release::${{ matrix.upstream_ref }} -> ${upstream_sha}"
+          echo "::notice title=Upstream release::${{ matrix.release.upstream_ref }} -> ${upstream_sha}"
 
           patch_paths=(
             Dockerfile-17
@@ -133,9 +137,9 @@ jobs:
 
           git -C .workflow fetch --no-tags --depth=1 \
             https://github.com/supabase/postgres.git \
-            "refs/tags/${{ matrix.upstream_ref }}:refs/tags/${{ matrix.upstream_ref }}"
+            "refs/tags/${{ matrix.release.upstream_ref }}:refs/tags/${{ matrix.release.upstream_ref }}"
 
-          git -C .workflow diff --binary "${{ matrix.upstream_ref }}" HEAD -- "${patch_paths[@]}" > pg_durable.patch
+          git -C .workflow diff --binary "${{ matrix.release.upstream_ref }}" HEAD -- "${patch_paths[@]}" > pg_durable.patch
 
           if [ ! -s pg_durable.patch ]; then
             echo "No pg_durable patch was generated. Current branch may not contain pg_durable changes." >&2
@@ -163,8 +167,8 @@ jobs:
 
           delay=30
           for attempt in 1 2 3; do
-            echo "::group::nix build attempt ${attempt}/3: ${{ matrix.package_attr }}"
-            nix build --accept-flake-config -L "${{ matrix.package_attr }}" 2>&1 | tee "$log_file"
+            echo "::group::nix build attempt ${attempt}/3: ${{ matrix.release.package_attr }} on ${{ matrix.arch }}"
+            nix build --accept-flake-config -L "${{ matrix.release.package_attr }}" 2>&1 | tee "$log_file"
             rc=${PIPESTATUS[0]}
             echo "::endgroup::"
 
@@ -184,10 +188,6 @@ jobs:
             fi
           done
 
-      - name: Set up QEMU
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_docker }}
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_docker }}
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
@@ -199,7 +199,7 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push multi-arch Docker image
+      - name: Build and push Docker image for ${{ matrix.arch }}
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_docker }}
         working-directory: upstream
         env:
@@ -208,27 +208,153 @@ jobs:
         run: |
           set -euo pipefail
           target_arg=()
-          if [ -n "${{ matrix.docker_target }}" ]; then
-            target_arg=(--target "${{ matrix.docker_target }}")
+          if [ -n "${{ matrix.release.docker_target }}" ]; then
+            target_arg=(--target "${{ matrix.release.docker_target }}")
           fi
 
           image_repo="${DOCKERHUB_REPOSITORY:-${DOCKER_USERNAME}/postgres}"
-          release_tag="${{ matrix.upstream_ref }}"
+          release_tag="${{ matrix.release.upstream_ref }}"
           release_tag="${release_tag#v}"
-          version_tag="${release_tag}-pg-durable"
-          floating_tag="${{ matrix.flavor }}-pg-durable"
+          version_tag="${release_tag}"
+          floating_tag="${{ matrix.release.flavor }}"
+          arch_tag="${{ matrix.arch }}"
 
           echo "Pushing Docker image:"
+          echo "  ${image_repo}:${version_tag}-${arch_tag}"
+          echo "  ${image_repo}:${floating_tag}-${arch_tag}"
+
+          docker buildx build \
+            --platform "linux/${arch_tag}" \
+            -f "${{ matrix.release.dockerfile }}" \
+            "${target_arg[@]}" \
+            -t "${image_repo}:${version_tag}-${arch_tag}" \
+            -t "${image_repo}:${floating_tag}-${arch_tag}" \
+            --cache-from "type=gha,scope=postgres-${{ matrix.release.flavor }}-${arch_tag}" \
+            --cache-to "type=gha,mode=max,scope=postgres-${{ matrix.release.flavor }}-${arch_tag}" \
+            --push \
+            .
+
+  merge_manifest:
+    name: Publish manifest ${{ matrix.release.flavor }} from ${{ matrix.release.upstream_ref }}
+    needs:
+      - discover
+      - build
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_docker }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ${{ fromJson(needs.discover.outputs.matrix).include }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@465a07811f14bebb1938fbed4728c6a1ff8901fc # v2.2.0
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Merge architecture images
+        env:
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
+        run: |
+          set -euo pipefail
+
+          image_repo="${DOCKERHUB_REPOSITORY:-${DOCKER_USERNAME}/postgres}"
+          release_tag="${{ matrix.release.upstream_ref }}"
+          release_tag="${release_tag#v}"
+          version_tag="${release_tag}"
+          floating_tag="${{ matrix.release.flavor }}"
+
+          echo "Publishing Docker manifests:"
           echo "  ${image_repo}:${version_tag}"
           echo "  ${image_repo}:${floating_tag}"
 
-          docker buildx build \
-            --platform linux/amd64,linux/arm64 \
-            -f "${{ matrix.dockerfile }}" \
-            "${target_arg[@]}" \
+          docker buildx imagetools create \
             -t "${image_repo}:${version_tag}" \
             -t "${image_repo}:${floating_tag}" \
-            --cache-from "type=gha,scope=pg-durable-${{ matrix.flavor }}" \
-            --cache-to "type=gha,mode=max,scope=pg-durable-${{ matrix.flavor }}" \
-            --push \
-            .
+            "${image_repo}:${version_tag}-amd64" \
+            "${image_repo}:${version_tag}-arm64"
+
+  release:
+    name: Publish GitHub release
+    needs:
+      - discover
+      - merge_manifest
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_docker }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create release notes
+        id: notes
+        env:
+          MATRIX: ${{ needs.discover.outputs.matrix }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKERHUB_REPOSITORY: ${{ vars.DOCKERHUB_REPOSITORY }}
+        run: |
+          set -euo pipefail
+
+          image_repo="${DOCKERHUB_REPOSITORY:-${DOCKER_USERNAME}/postgres}"
+          standard_ref="$(jq -r '.include[] | select(.flavor == "17") | .upstream_ref' <<< "$MATRIX" | head -n1)"
+          orioledb_ref="$(jq -r '.include[] | select(.flavor == "orioledb-17") | .upstream_ref' <<< "$MATRIX" | head -n1)"
+
+          standard_tag="${standard_ref#v}"
+          orioledb_tag="${orioledb_ref#v}"
+          release_tag="custom-postgres-${standard_tag}"
+          if [ -n "$orioledb_tag" ] && [ "$orioledb_tag" != "null" ]; then
+            release_tag="${release_tag}-orioledb-${orioledb_tag%-orioledb}"
+          fi
+
+          {
+            echo "Custom PostgreSQL 17 build based on Supabase upstream releases."
+            echo
+            echo "This build includes the custom extension set from this branch."
+            echo
+            echo "## Docker images"
+            echo
+            jq -c '.include[]' <<< "$MATRIX" | while read -r item; do
+              flavor="$(jq -r '.flavor' <<< "$item")"
+              upstream_ref="$(jq -r '.upstream_ref' <<< "$item")"
+              release_name="$(jq -r '.release_name // .upstream_ref' <<< "$item")"
+              version_tag="${upstream_ref#v}"
+              floating_tag="${flavor}"
+
+              echo "### ${flavor}"
+              echo
+              echo "- Upstream release: ${upstream_ref} (${release_name})"
+              echo "- Docker Hub image: https://hub.docker.com/r/${image_repo}/tags?name=${version_tag}"
+              echo "- Version pull: \`docker pull ${image_repo}:${version_tag}\`"
+              echo "- Floating Docker Hub image: https://hub.docker.com/r/${image_repo}/tags?name=${floating_tag}"
+              echo "- Floating pull: \`docker pull ${image_repo}:${floating_tag}\`"
+              echo
+            done
+          } > release-notes.md
+
+          title="Custom PostgreSQL 17 ${standard_tag}"
+          if [ -n "$orioledb_tag" ] && [ "$orioledb_tag" != "null" ]; then
+            title="${title} / OrioleDB ${orioledb_tag}"
+          fi
+
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+          echo "title=${title}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.notes.outputs.release_tag }}
+          RELEASE_TITLE: ${{ steps.notes.outputs.title }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md
+          else
+            gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md \
+              --latest=false
+          fi
