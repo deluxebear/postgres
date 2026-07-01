@@ -3,7 +3,7 @@ name: Build Upstream PG17 Release with custom extensions
 on:
   push:
     branches:
-      - custom-extensions/pg-durable
+      - custom-extensions
   workflow_dispatch:
     inputs:
       build_docker:
