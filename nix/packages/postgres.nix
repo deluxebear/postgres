@@ -59,8 +59,16 @@
         x: x != ../ext/timescaledb.nix && x != ../ext/timescaledb-2.9.1.nix && x != ../ext/plv8
       ) ourExtensions;
 
-      orioledbExtensions = orioleFilteredExtensions ++ [ ../ext/orioledb.nix ];
-      dbExtensions17 = orioleFilteredExtensions;
+      pg17StandardOnlyExtensions = [
+        ../ext/pg_duckdb.nix
+      ];
+
+      pg17SharedExtensions = [
+        ../ext/pg_durable.nix
+      ];
+
+      orioledbExtensions = orioleFilteredExtensions ++ pg17SharedExtensions ++ [ ../ext/orioledb.nix ];
+      dbExtensions17 = orioleFilteredExtensions ++ pg17StandardOnlyExtensions ++ pg17SharedExtensions;
 
       # CLI extensions - minimal set for Supabase CLI with migration support
       cliExtensions = [
