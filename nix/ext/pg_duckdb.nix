@@ -47,6 +47,7 @@ let
     ];
 
     dontUseCmakeConfigure = true;
+    dontUseNinjaBuild = true;
     dontConfigure = true;
 
     postPatch = ''
