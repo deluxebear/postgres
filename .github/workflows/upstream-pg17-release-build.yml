@@ -181,6 +181,7 @@ jobs:
             nix/checks.nix
             nix/ext/pg_duckdb.nix
             nix/ext/pg_durable.nix
+            nix/packages/default.nix
             nix/packages/postgres.nix
             nix/tests/expected/z_17_ext_interface.out
             nix/tests/expected/z_multigres-17_ext_interface.out
@@ -210,6 +211,7 @@ jobs:
           test -f upstream/docker/pgbackrest/pgbackrest-wrapper.sh
           test -f upstream/nix/ext/pg_durable.nix
           test -f upstream/nix/ext/pg_duckdb.nix
+          grep -R 'version = "2.58.0"' upstream/nix/packages/default.nix
           grep -R "pg_durable\\|pg_duckdb" upstream/nix/packages/postgres.nix upstream/nix/ext/pg_durable.nix upstream/nix/ext/pg_duckdb.nix
           if [ "${{ matrix.release.flavor }}" = "orioledb-17" ]; then
             if grep -R "orioledb, pg_duckdb" \
@@ -397,6 +399,7 @@ jobs:
             nix/checks.nix
             nix/ext/pg_duckdb.nix
             nix/ext/pg_durable.nix
+            nix/packages/default.nix
             nix/packages/postgres.nix
             nix/tests/expected/z_17_ext_interface.out
             nix/tests/expected/z_multigres-17_ext_interface.out
@@ -424,6 +427,7 @@ jobs:
           git -C upstream diff --check
 
           test -f upstream/docker/pgbackrest/pgbackrest-wrapper.sh
+          grep -R 'version = "2.58.0"' upstream/nix/packages/default.nix
 
           git -C upstream config user.name "github-actions[bot]"
           git -C upstream config user.email "41898282+github-actions[bot]@users.noreply.github.com"
