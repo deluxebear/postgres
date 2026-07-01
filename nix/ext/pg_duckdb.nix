@@ -46,6 +46,9 @@ let
       postgresql
     ];
 
+    dontUseCmakeConfigure = true;
+    dontConfigure = true;
+
     postPatch = ''
       rm -rf third_party/duckdb
       mkdir -p third_party/duckdb
