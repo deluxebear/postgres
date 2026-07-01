@@ -19,14 +19,14 @@ $postgres-custom-extension-build
 当需要引入新的自定义扩展时，直接这样提需求：
 
 ```text
-Use $postgres-custom-extension-build to add <extension-name> to PostgreSQL 17 and OrioleDB 17.
+Use $postgres-custom-extension-build to add <extension-name> to PostgreSQL 17.
 ```
 
 这个技能会引导 Codex 按本项目约定处理：
 
 - 在专门分支维护自定义扩展代码
 - 添加 `nix/ext/<extension>.nix`
-- 将扩展接入 `psql_17` 和需要时的 `psql_orioledb-17`
+- 将扩展接入 `psql_17`，并在确认兼容时接入 `psql_orioledb-17`
 - 正确处理 `shared_preload_libraries`
 - 更新 Dockerfile、Ansible、pgctld 模板和测试快照
 - 通过 GitHub Action 基于 upstream release 重新构建
@@ -56,16 +56,32 @@ nix/ext/pg_durable.nix
 
 2. 在 `nix/packages/postgres.nix` 中加入目标扩展集合。
 
-当前 PG17 专用扩展使用：
+当前 PG17 扩展按兼容性拆分。
+
+只适用于标准 PostgreSQL 17 的扩展使用：
 
 ```nix
-pg17OnlyExtensions = [
+pg17StandardOnlyExtensions = [
   ../ext/pg_duckdb.nix
+];
+```
+
+同时适用于标准 PostgreSQL 17 和 OrioleDB17 的扩展使用：
+
+```nix
+pg17SharedExtensions = [
   ../ext/pg_durable.nix
 ];
 ```
 
-这个集合会被加入：
+`pg17StandardOnlyExtensions` 会被加入：
+
+```text
+psql_17
+psql_17_slim
+```
+
+`pg17SharedExtensions` 会被加入：
 
 ```text
 psql_17
@@ -73,6 +89,8 @@ psql_17_slim
 psql_orioledb-17
 psql_orioledb-17_slim
 ```
+
+例如：`pg_duckdb v1.1.1` 可以编入标准 PG17，但当前不能直接编入 OrioleDB17，因为 OrioleDB 的 `TableAmRoutine` ABI 和标准 PostgreSQL 17 不一致；`pg_durable` 当前继续作为共享扩展编入两类 PG17 构建。
 
 3. 如果扩展需要预加载，追加到 `shared_preload_libraries`，不要覆盖已有值。
 

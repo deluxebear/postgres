@@ -7,7 +7,6 @@
   cmake,
   git,
   ninja,
-  perl,
   pkg-config,
   python3,
   curl,
@@ -41,7 +40,6 @@ let
       cmake
       git
       ninja
-      perl
       pkg-config
       python3
     ];
@@ -77,9 +75,6 @@ let
 
       mkdir -p .git/modules/third_party/duckdb
       touch .git/modules/third_party/duckdb/HEAD
-    ''
-    + lib.optionalString (postgresql.isOrioleDB or false) ''
-      perl -0pi -e 's/\n\s*\.tuple_insert_speculative = duckdb_tuple_insert_speculative,\n\s*\.tuple_complete_speculative = duckdb_tuple_complete_speculative,//' src/pgduckdb_table_am.cpp
     '';
 
     makeFlags = [

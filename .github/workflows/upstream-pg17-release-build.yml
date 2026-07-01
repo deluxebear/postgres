@@ -208,6 +208,17 @@ jobs:
           test -f upstream/nix/ext/pg_durable.nix
           test -f upstream/nix/ext/pg_duckdb.nix
           grep -R "pg_durable\\|pg_duckdb" upstream/nix/packages/postgres.nix upstream/nix/ext/pg_durable.nix upstream/nix/ext/pg_duckdb.nix
+          if [ "${{ matrix.release.flavor }}" = "orioledb-17" ]; then
+            if grep -R "orioledb, pg_duckdb" \
+              upstream/Dockerfile-orioledb-17 \
+              upstream/Dockerfile-multigres \
+              upstream/docker/pgctld/orioledb-postgresql.conf.tmpl \
+              upstream/nix/tools/run-server.sh.in \
+              upstream/ansible/tasks/stage2-setup-postgres.yml; then
+              echo "pg_duckdb must not be preloaded in OrioleDB17 builds until pg_duckdb supports OrioleDB TableAmRoutine ABI." >&2
+              exit 1
+            fi
+          fi
 
       - name: Install Nix
         uses: ./.workflow/.github/actions/nix-install-ephemeral
