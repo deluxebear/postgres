@@ -28,6 +28,11 @@ let
     hash = "sha256-dRHh9QnOnBCpXArli8RVHUsBWx3FZk9FN7L24SDEyR8=";
   };
 
+  httpfsSrc = fetchurl {
+    url = "https://github.com/duckdb/duckdb-httpfs/archive/9c7d34977b10346d0b4cbbde5df807d1dab0b2bf.tar.gz";
+    hash = "sha256-2Ttof3k+Z038+deETI5yZRJucIQ4mXvuTuAcMvtBKAM=";
+  };
+
   extension = stdenv.mkDerivation {
     inherit pname version src;
 
@@ -55,8 +60,24 @@ let
       mkdir -p third_party/duckdb
       tar -xzf ${duckdbSrc} --strip-components=1 -C third_party/duckdb
 
+      rm -rf third_party/duckdb-httpfs
+      mkdir -p third_party/duckdb-httpfs
+      tar -xzf ${httpfsSrc} --strip-components=1 -C third_party/duckdb-httpfs
+
+      cat > third_party/pg_duckdb_extensions.cmake <<'EOF'
+      duckdb_extension_load(json)
+      duckdb_extension_load(icu)
+      duckdb_extension_load(httpfs
+          SOURCE_DIR ''${CMAKE_CURRENT_LIST_DIR}/duckdb-httpfs
+          EXTENSION_VERSION 9c7d34977b
+      )
+      EOF
+
       mkdir -p .git/modules/third_party/duckdb
       touch .git/modules/third_party/duckdb/HEAD
+    ''
+    + lib.optionalString (postgresql.isOrioleDB or false) ''
+      perl -0pi -e 's/\n\s*\.tuple_insert_speculative = duckdb_tuple_insert_speculative,\n\s*\.tuple_complete_speculative = duckdb_tuple_complete_speculative,//' src/pgduckdb_table_am.cpp
     '';
 
     makeFlags = [
