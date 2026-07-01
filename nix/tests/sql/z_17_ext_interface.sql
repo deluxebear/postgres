@@ -21,6 +21,7 @@ from
   pg_available_extensions
 where
   installed_version is null
+  and name not in ('pg_duckdb', 'pg_durable')
 order by
   name asc;
 
