@@ -3,6 +3,12 @@
 !.gitignore
 !.gitkeep
 !/.claude/
+!/.codex/
+/.codex/*
+!/.codex/skills/
+/.codex/skills/*
+!/.codex/skills/postgres-custom-extension-build/
+!/.codex/skills/postgres-custom-extension-build/**
 !/.coderabbit.yaml
 !/.envrc.recommended
 !/.github/
