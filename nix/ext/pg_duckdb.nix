@@ -7,6 +7,7 @@
   cmake,
   git,
   ninja,
+  perl,
   pkg-config,
   python3,
   curl,
@@ -40,6 +41,7 @@ let
       cmake
       git
       ninja
+      perl
       pkg-config
       python3
     ];
