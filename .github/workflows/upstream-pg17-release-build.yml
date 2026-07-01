@@ -173,6 +173,7 @@ jobs:
             Dockerfile-17
             Dockerfile-multigres
             Dockerfile-orioledb-17
+            ansible/files/pgbackrest_config/repo1_encrypted.conf
             ansible/tasks/stage2-setup-postgres.yml
             docker/pgbackrest/pgbackrest-wrapper.sh
             docker/pgctld/orioledb-postgresql.conf.tmpl
@@ -388,6 +389,7 @@ jobs:
             Dockerfile-17
             Dockerfile-multigres
             Dockerfile-orioledb-17
+            ansible/files/pgbackrest_config/repo1_encrypted.conf
             ansible/tasks/stage2-setup-postgres.yml
             docker/pgbackrest/pgbackrest-wrapper.sh
             docker/pgctld/orioledb-postgresql.conf.tmpl
