@@ -292,6 +292,124 @@ writeShellApplication {
         return 1
     }
 
+    verify_pgbackrest_integration() {
+        local container="$1"
+
+        log_info "=== pgBackRest integration checks ==="
+
+        if ! docker exec "$container" test -x /nix/var/nix/profiles/default/bin/pgbackrest; then
+            log_error "  Nix pgbackrest binary not found"
+            exit 1
+        fi
+        log_info "  ✓ Nix pgbackrest binary exists"
+
+        if ! docker exec "$container" test -x /usr/bin/pgbackrest; then
+            log_error "  /usr/bin/pgbackrest wrapper not found"
+            exit 1
+        fi
+
+        local wrapper_target
+        wrapper_target=$(docker exec "$container" sh -c "readlink -f /usr/bin/pgbackrest")
+        if [[ "$wrapper_target" != "/usr/bin/pgbackrest" ]]; then
+            log_error "  /usr/bin/pgbackrest resolves to $wrapper_target, expected wrapper file"
+            exit 1
+        fi
+
+        local wrapper_first_line
+        wrapper_first_line=$(docker exec "$container" sh -c "head -1 /usr/bin/pgbackrest")
+        if [[ "$wrapper_first_line" != "#!/bin/bash" ]]; then
+            log_error "  /usr/bin/pgbackrest is not the wrapper script (first line: $wrapper_first_line)"
+            exit 1
+        fi
+        local path_pgbackrest
+        path_pgbackrest=$(docker exec "$container" sh -c "command -v pgbackrest")
+        if [[ "$path_pgbackrest" != "/usr/bin/pgbackrest" ]]; then
+            log_error "  PATH resolves pgbackrest to $path_pgbackrest, expected /usr/bin/pgbackrest"
+            exit 1
+        fi
+        log_info "  ✓ /usr/bin/pgbackrest is the wrapper, not the Nix binary symlink"
+
+        if ! docker exec "$container" sh -c "test -s /etc/ssl/certs/ca-certificates.crt"; then
+            log_error "  CA bundle missing at /etc/ssl/certs/ca-certificates.crt"
+            exit 1
+        fi
+        if ! docker exec "$container" sh -c \
+            "test \"\$SSL_CERT_FILE\" = /etc/ssl/certs/ca-certificates.crt && \
+             test \"\$CURL_CA_BUNDLE\" = /etc/ssl/certs/ca-certificates.crt && \
+             test \"\$NIX_SSL_CERT_FILE\" = /etc/ssl/certs/ca-certificates.crt"; then
+            log_error "  CA environment variables are not wired to the Alpine CA bundle"
+            exit 1
+        fi
+        log_info "  ✓ CA bundle and TLS environment are present"
+
+        local conf_dir_stat
+        conf_dir_stat=$(docker exec "$container" sh -c "stat -c '%a %U %G' /etc/pgbackrest/conf.d")
+        if [[ "$conf_dir_stat" != "2770 pgbackrest postgres" ]]; then
+            log_error "  /etc/pgbackrest/conf.d permissions are '$conf_dir_stat', expected '2770 pgbackrest postgres'"
+            exit 1
+        fi
+
+        local config_check
+        config_check=$(docker exec "$container" sh -c "
+            test -f /etc/pgbackrest/pgbackrest.conf &&
+            test -f /etc/pgbackrest/conf.d/computed_globals.conf &&
+            test -f /etc/pgbackrest/conf.d/repo1.conf &&
+            test -f /etc/pgbackrest/conf.d/repo1_async.conf &&
+            test -f /etc/pgbackrest/conf.d/repo1_encrypted.conf &&
+            ! grep -R '{{' /etc/pgbackrest &&
+            ! grep -RE '^[[:space:]]*repo-cipher-pass[[:space:]]*=' /etc/pgbackrest
+        " 2>&1) || {
+            log_error "  pgBackRest static config validation failed: $config_check"
+            exit 1
+        }
+        log_info "  ✓ static config skeleton is present without rendered secrets"
+
+        for log_file in saa-pgb.log wal-push.log wal-fetch.log; do
+            local log_stat
+            log_stat=$(docker exec "$container" sh -c "stat -c '%a %U %G' /var/log/pgbackrest/$log_file")
+            if [[ "$log_stat" != "660 pgbackrest postgres" ]]; then
+                log_error "  /var/log/pgbackrest/$log_file permissions are '$log_stat', expected '660 pgbackrest postgres'"
+                exit 1
+            fi
+        done
+        log_info "  ✓ pgBackRest log files are pre-created"
+
+        if ! docker exec -u root "$container" sh -c "test \$(stat -c '%a' /etc/sudoers.d/pgbackrest) = 440"; then
+            log_error "  /etc/sudoers.d/pgbackrest is not mode 0440"
+            exit 1
+        fi
+        if ! docker exec -u root "$container" visudo -cf /etc/sudoers.d/pgbackrest; then
+            log_error "  /etc/sudoers.d/pgbackrest failed visudo validation"
+            exit 1
+        fi
+        log_info "  ✓ sudoers file validates"
+
+        local version_out
+        version_out=$(docker exec -u postgres "$container" sh -c "/usr/bin/pgbackrest version 2>&1") || {
+            log_error "  postgres user cannot run pgbackrest via wrapper: $version_out"
+            exit 1
+        }
+        if ! echo "$version_out" | grep -qi "pgBackRest"; then
+            log_error "  unexpected pgbackrest version output: $version_out"
+            exit 1
+        fi
+        log_info "  ✓ postgres user can run pgBackRest through wrapper"
+
+        local filtered_out
+        filtered_out=$(docker exec -u postgres "$container" sh -c \
+            "/usr/bin/pgbackrest --config=/tmp/pgbackrest-missing.conf --cmd=/tmp/pgbackrest-bad-cmd version 2>&1") || {
+            log_error "  wrapper did not filter dangerous options: $filtered_out"
+            exit 1
+        }
+        if ! echo "$filtered_out" | grep -qi "pgBackRest"; then
+            log_error "  unexpected filtered pgbackrest output: $filtered_out"
+            exit 1
+        fi
+        log_info "  ✓ wrapper filters --config and --cmd"
+
+        log_info "=== pgBackRest integration checks passed ==="
+    }
+
     # Verify pgctld integration for multigres images.
     # Runs a short-lived pgctld cluster in /tmp (separate from the SQL-test postgres).
     # Tests: container user is postgres, /usr/local/bin/pgctld works, pgctld init+start
@@ -492,6 +610,10 @@ writeShellApplication {
             -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
             -p "$PORT:5432" \
             "$IMAGE_TAG"
+
+        if [[ "$VERSION" == "17" || "$VERSION" == "orioledb-17" ]]; then
+            verify_pgbackrest_integration "$CONTAINER_NAME"
+        fi
 
         # Multigres images use "tail -f /dev/null" as their entrypoint — postgres must be
         # started manually before we can run tests against them.

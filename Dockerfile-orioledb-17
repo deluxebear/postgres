@@ -37,7 +37,7 @@ WORKDIR /nixpg
 COPY . .
 
 # Build PostgreSQL with extensions
-RUN nix profile add path:.#psql_orioledb-17_slim/bin
+RUN nix profile add path:.#psql_orioledb-17_slim/bin path:.#pg-backrest
 
 RUN nix store gc
 
@@ -77,12 +77,15 @@ FROM alpine:3.23 AS production
 # Install minimal runtime dependencies
 RUN apk add --no-cache \
     bash \
+    ca-certificates \
     curl \
     shadow \
     su-exec \
+    sudo \
     tzdata \
     musl-locales \
     musl-locales-lang \
+    && update-ca-certificates \
     && rm -rf /var/cache/apk/*
 
 # Create postgres user/group
@@ -90,7 +93,10 @@ RUN addgroup -S postgres && \
     adduser -S -G postgres -h /var/lib/postgresql -s /bin/bash postgres && \
     addgroup -S wal-g && \
     adduser -S -G wal-g -s /bin/bash wal-g && \
-    adduser postgres wal-g
+    adduser postgres wal-g && \
+    addgroup -S pgbackrest && \
+    adduser -S -G pgbackrest -h /var/lib/pgbackrest -s /sbin/nologin pgbackrest && \
+    adduser pgbackrest postgres
 
 # Copy Nix store and profiles from builder (profile already created by nix profile install)
 COPY --from=nix-builder /nix /nix
@@ -112,11 +118,30 @@ RUN mkdir -p /usr/lib/postgresql/bin \
     && chown -R postgres:postgres /usr/share/postgresql \
     && chown -R postgres:postgres /var/run/postgresql
 
+# Setup pgBackRest runtime directories and permissions.
+RUN mkdir -p \
+    /etc/pgbackrest/conf.d \
+    /var/lib/pgbackrest \
+    /var/spool/pgbackrest \
+    /var/log/pgbackrest && \
+    chown -R pgbackrest:postgres \
+        /etc/pgbackrest \
+        /var/lib/pgbackrest \
+        /var/spool/pgbackrest \
+        /var/log/pgbackrest && \
+    chmod 02770 /etc/pgbackrest/conf.d && \
+    chmod 0770 /var/lib/pgbackrest /var/spool/pgbackrest /var/log/pgbackrest && \
+    touch /var/log/pgbackrest/saa-pgb.log /var/log/pgbackrest/wal-push.log /var/log/pgbackrest/wal-fetch.log && \
+    chown pgbackrest:postgres /var/log/pgbackrest/*.log && \
+    chmod 0660 /var/log/pgbackrest/*.log
+
 # Create symbolic links for binaries
 RUN for f in /nix/var/nix/profiles/default/bin/*; do \
         ln -sf "$f" /usr/lib/postgresql/bin/ 2>/dev/null || true; \
         ln -sf "$f" /usr/bin/ 2>/dev/null || true; \
     done
+
+COPY --chmod=755 docker/pgbackrest/pgbackrest-wrapper.sh /usr/bin/pgbackrest
 
 # Create symbolic links for PostgreSQL shares
 RUN ln -sf /nix/var/nix/profiles/default/share/postgresql/* /usr/lib/postgresql/share/postgresql/ 2>/dev/null || true && \
@@ -140,6 +165,22 @@ COPY --chown=postgres:postgres ansible/files/postgresql_config/custom_walg.conf 
 COPY --chown=postgres:postgres ansible/files/postgresql_config/custom_read_replica.conf /etc/postgresql-custom/read-replica.conf
 COPY --chown=postgres:postgres ansible/files/walg_helper_scripts/wal_fetch.sh /home/postgres/wal_fetch.sh
 COPY ansible/files/walg_helper_scripts/wal_change_ownership.sh /root/wal_change_ownership.sh
+COPY --chown=pgbackrest:postgres ansible/files/pgbackrest_config/pgbackrest.conf /etc/pgbackrest/pgbackrest.conf
+COPY --chown=pgbackrest:postgres ansible/files/pgbackrest_config/computed_globals.conf /etc/pgbackrest/conf.d/computed_globals.conf
+COPY --chown=pgbackrest:postgres ansible/files/pgbackrest_config/repo1.conf /etc/pgbackrest/conf.d/repo1.conf
+COPY --chown=pgbackrest:postgres ansible/files/pgbackrest_config/repo1_async.conf /etc/pgbackrest/conf.d/repo1_async.conf
+COPY --chown=pgbackrest:postgres ansible/files/pgbackrest_config/repo1_encrypted.conf /etc/pgbackrest/conf.d/repo1_encrypted.conf
+
+RUN chmod 0640 /etc/pgbackrest/pgbackrest.conf /etc/pgbackrest/conf.d/*.conf && \
+    ! grep -R "{{" /etc/pgbackrest && \
+    ! grep -RE '^[[:space:]]*repo-cipher-pass[[:space:]]*=' /etc/pgbackrest && \
+    printf '%s\n' \
+      'postgres ALL=(pgbackrest) NOPASSWD: /usr/bin/pgbackrest' \
+      'postgres ALL=(pgbackrest) NOPASSWD: /nix/var/nix/profiles/default/bin/pgbackrest' \
+      'pgbackrest ALL=(pgbackrest) NOPASSWD: /nix/var/nix/profiles/default/bin/pgbackrest' \
+      > /etc/sudoers.d/pgbackrest && \
+    chmod 0440 /etc/sudoers.d/pgbackrest && \
+    visudo -cf /etc/sudoers.d/pgbackrest
 
 # Configure PostgreSQL settings
 RUN sed -i \
@@ -180,7 +221,7 @@ RUN mkdir -p /usr/share/postgresql/extension/ && \
     chmod +x /usr/lib/postgresql/bin/pgsodium_getkey.sh
 
 # Environment variables
-ENV PATH="/nix/var/nix/profiles/default/bin:/usr/lib/postgresql/bin:${PATH}"
+ENV PATH="/usr/bin:/nix/var/nix/profiles/default/bin:/usr/lib/postgresql/bin:${PATH}"
 ENV PGDATA=/var/lib/postgresql/data
 ENV POSTGRES_HOST=/var/run/postgresql
 ENV POSTGRES_USER=supabase_admin
@@ -190,6 +231,9 @@ ENV LANG=en_US.UTF-8
 ENV LANGUAGE=en_US:en
 ENV LC_ALL=en_US.UTF-8
 ENV GRN_PLUGINS_DIR=/usr/lib/groonga/plugins
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+ENV NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 # Point to minimal glibc locales included in slim Nix package for initdb locale support
 ENV LOCALE_ARCHIVE=/nix/var/nix/profiles/default/lib/locale/locale-archive
 
