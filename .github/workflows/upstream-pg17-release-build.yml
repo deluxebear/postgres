@@ -1,4 +1,4 @@
-name: Build Upstream PG17 Release with pg_durable
+name: Build Upstream PG17 Release with custom extensions
 
 on:
   push:
@@ -162,7 +162,7 @@ jobs:
           ref: ${{ matrix.release.upstream_ref }}
           path: upstream
 
-      - name: Apply pg_durable changes onto upstream release
+      - name: Apply custom extension changes onto upstream release
         run: |
           set -euo pipefail
 
@@ -177,6 +177,7 @@ jobs:
             docker/pgctld/orioledb-postgresql.conf.tmpl
             docker/pgctld/postgresql.conf.tmpl
             nix/checks.nix
+            nix/ext/pg_duckdb.nix
             nix/ext/pg_durable.nix
             nix/packages/postgres.nix
             nix/tests/expected/z_17_ext_interface.out
@@ -194,18 +195,19 @@ jobs:
             https://github.com/supabase/postgres.git \
             "refs/tags/${{ matrix.release.upstream_ref }}:refs/tags/${{ matrix.release.upstream_ref }}"
 
-          git -C .workflow diff --binary "${{ matrix.release.upstream_ref }}" HEAD -- "${patch_paths[@]}" > pg_durable.patch
+          git -C .workflow diff --binary "${{ matrix.release.upstream_ref }}" HEAD -- "${patch_paths[@]}" > custom_extensions.patch
 
-          if [ ! -s pg_durable.patch ]; then
-            echo "No pg_durable patch was generated. Current branch may not contain pg_durable changes." >&2
+          if [ ! -s custom_extensions.patch ]; then
+            echo "No custom extension patch was generated. Current branch may not contain extension changes." >&2
             exit 1
           fi
 
-          git -C upstream apply --3way ../pg_durable.patch
+          git -C upstream apply --3way ../custom_extensions.patch
           git -C upstream diff --check
 
           test -f upstream/nix/ext/pg_durable.nix
-          grep -R "pg_durable" upstream/nix/packages/postgres.nix upstream/nix/ext/pg_durable.nix
+          test -f upstream/nix/ext/pg_duckdb.nix
+          grep -R "pg_durable\\|pg_duckdb" upstream/nix/packages/postgres.nix upstream/nix/ext/pg_durable.nix upstream/nix/ext/pg_duckdb.nix
 
       - name: Install Nix
         uses: ./.workflow/.github/actions/nix-install-ephemeral
@@ -377,6 +379,7 @@ jobs:
             docker/pgctld/orioledb-postgresql.conf.tmpl
             docker/pgctld/postgresql.conf.tmpl
             nix/checks.nix
+            nix/ext/pg_duckdb.nix
             nix/ext/pg_durable.nix
             nix/packages/postgres.nix
             nix/tests/expected/z_17_ext_interface.out
@@ -394,21 +397,21 @@ jobs:
             https://github.com/supabase/postgres.git \
             "refs/tags/${{ matrix.release.upstream_ref }}:refs/tags/${{ matrix.release.upstream_ref }}"
 
-          git -C .workflow diff --binary "${{ matrix.release.upstream_ref }}" HEAD -- "${patch_paths[@]}" > pg_durable.patch
+          git -C .workflow diff --binary "${{ matrix.release.upstream_ref }}" HEAD -- "${patch_paths[@]}" > custom_extensions.patch
 
-          if [ ! -s pg_durable.patch ]; then
-            echo "No pg_durable patch was generated. Current branch may not contain pg_durable changes." >&2
+          if [ ! -s custom_extensions.patch ]; then
+            echo "No custom extension patch was generated. Current branch may not contain extension changes." >&2
             exit 1
           fi
 
-          git -C upstream apply --3way ../pg_durable.patch
+          git -C upstream apply --3way ../custom_extensions.patch
           git -C upstream diff --check
 
           git -C upstream config user.name "github-actions[bot]"
           git -C upstream config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git -C upstream add -A
           git -C upstream commit \
-            -m "Apply pg_durable changes to ${{ matrix.release.upstream_ref }}" \
+            -m "Apply custom extension changes to ${{ matrix.release.upstream_ref }}" \
             -m "Upstream: supabase/postgres@${upstream_sha}" \
             -m "Extension source: ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
 

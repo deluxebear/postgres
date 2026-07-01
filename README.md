@@ -60,6 +60,7 @@ nix/ext/pg_durable.nix
 
 ```nix
 pg17OnlyExtensions = [
+  ../ext/pg_duckdb.nix
   ../ext/pg_durable.nix
 ];
 ```
@@ -167,7 +168,7 @@ ${DOCKER_USERNAME}/postgres
 在 GitHub Actions 页面选择：
 
 ```text
-Build Upstream PG17 Release with pg_durable
+Build Upstream PG17 Release with custom extensions
 ```
 
 然后点击 `Run workflow`。

@@ -60,6 +60,7 @@
       ) ourExtensions;
 
       pg17OnlyExtensions = [
+        ../ext/pg_duckdb.nix
         ../ext/pg_durable.nix
       ];
 
