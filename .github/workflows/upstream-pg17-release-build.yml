@@ -24,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.releases.outputs.matrix }}
+      has_work: ${{ steps.releases.outputs.has_work }}
     steps:
       - name: Select latest non-test PG17 releases
         id: releases
@@ -37,7 +38,7 @@ jobs:
             -H "Authorization: Bearer ${GH_TOKEN}" \
             "https://api.github.com/repos/supabase/postgres/releases?per_page=100")"
 
-          matrix="$(jq -c '
+          selected_matrix="$(jq -c '
             def release_text: ((.tag_name // "") + " " + (.name // ""));
             def stable: (.draft | not) and (.prerelease | not);
             def no_test: (release_text | test("test"; "i") | not);
@@ -73,18 +74,60 @@ jobs:
             }
           ' <<< "$releases_json")"
 
-          if [ "$(jq '.include | length' <<< "$matrix")" -eq 0 ]; then
+          if [ "$(jq '.include | length' <<< "$selected_matrix")" -eq 0 ]; then
             echo "No matching upstream PG17 releases found" >&2
             exit 1
           fi
 
           echo "Selected releases:"
-          jq -r '.include[] | "- \(.flavor): \(.upstream_ref) (\(.release_name))"' <<< "$matrix"
+          jq -r '.include[] | "- \(.flavor): \(.upstream_ref) (\(.release_name))"' <<< "$selected_matrix"
+
+          matrix='{"include":[]}'
+          while IFS= read -r item; do
+            upstream_ref="$(jq -r '.upstream_ref' <<< "$item")"
+            version_tag="${upstream_ref#v}"
+            source_tag="postgres-${version_tag}"
+
+            release_status="$(curl -sS -o /dev/null -w "%{http_code}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${source_tag}")"
+
+            if [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "$release_status" = "200" ]; then
+              echo "Already released ${source_tag}; skipping scheduled build for ${upstream_ref}"
+              continue
+            fi
+
+            matrix="$(jq -c --argjson item "$item" '.include += [$item]' <<< "$matrix")"
+          done < <(jq -c '.include[]' <<< "$selected_matrix")
+
+          work_count="$(jq '.include | length' <<< "$matrix")"
+          if [ "$work_count" -eq 0 ]; then
+            echo "No new upstream PG17 releases need building for ${GITHUB_EVENT_NAME} event."
+            has_work=false
+          else
+            echo "Releases to build:"
+            jq -r '.include[] | "- \(.flavor): \(.upstream_ref) (\(.release_name))"' <<< "$matrix"
+            has_work=true
+          fi
+
           echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+          echo "has_work=${has_work}" >> "$GITHUB_OUTPUT"
+
+  no_changes:
+    name: No new upstream releases
+    needs: discover
+    if: ${{ needs.discover.outputs.has_work != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report no-op
+        run: |
+          echo "No new stable Supabase PG17 releases require a build."
 
   build:
     name: Build ${{ matrix.release.flavor }} ${{ matrix.arch }} from ${{ matrix.release.upstream_ref }}
     needs: discover
+    if: ${{ needs.discover.outputs.has_work == 'true' }}
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     timeout-minutes: 360
     strategy:
@@ -239,7 +282,7 @@ jobs:
     needs:
       - discover
       - build
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_docker }}
+    if: ${{ needs.discover.outputs.has_work == 'true' && (github.event_name != 'workflow_dispatch' || inputs.build_docker) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -283,7 +326,7 @@ jobs:
     needs:
       - discover
       - merge_manifest
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_docker }}
+    if: ${{ needs.discover.outputs.has_work == 'true' && (github.event_name != 'workflow_dispatch' || inputs.build_docker) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
