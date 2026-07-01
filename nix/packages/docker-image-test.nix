@@ -303,6 +303,19 @@ writeShellApplication {
         fi
         log_info "  ✓ Nix pgbackrest binary exists"
 
+        local real_pgbackrest="/usr/lib/pgbackrest/bin/pgbackrest.real"
+        if ! docker exec "$container" test -x "$real_pgbackrest"; then
+            log_error "  real pgBackRest binary not found at $real_pgbackrest"
+            exit 1
+        fi
+
+        local real_magic
+        real_magic=$(docker exec "$container" sh -c "od -An -tx1 -N4 '$real_pgbackrest' | tr -d ' \n'")
+        if [[ "$real_magic" != "7f454c46" ]]; then
+            log_error "  $real_pgbackrest is not an ELF binary; magic bytes were $real_magic"
+            exit 1
+        fi
+
         if ! docker exec "$container" test -x /usr/bin/pgbackrest; then
             log_error "  /usr/bin/pgbackrest wrapper not found"
             exit 1
@@ -321,13 +334,26 @@ writeShellApplication {
             log_error "  /usr/bin/pgbackrest is not the wrapper script (first line: $wrapper_first_line)"
             exit 1
         fi
+
+        local wrapper_magic
+        wrapper_magic=$(docker exec "$container" sh -c "od -An -tx1 -N2 /usr/bin/pgbackrest | tr -d ' \n'")
+        if [[ "$wrapper_magic" != "2321" ]]; then
+            log_error "  /usr/bin/pgbackrest is not a script wrapper; magic bytes were $wrapper_magic"
+            exit 1
+        fi
+
+        if ! docker exec "$container" grep -Fq "$real_pgbackrest" /usr/bin/pgbackrest; then
+            log_error "  /usr/bin/pgbackrest wrapper does not target $real_pgbackrest"
+            exit 1
+        fi
+
         local path_pgbackrest
         path_pgbackrest=$(docker exec "$container" sh -c "command -v pgbackrest")
         if [[ "$path_pgbackrest" != "/usr/bin/pgbackrest" ]]; then
             log_error "  PATH resolves pgbackrest to $path_pgbackrest, expected /usr/bin/pgbackrest"
             exit 1
         fi
-        log_info "  ✓ /usr/bin/pgbackrest is the wrapper, not the Nix binary symlink"
+        log_info "  ✓ /usr/bin/pgbackrest is the wrapper and targets the real ELF binary"
 
         if ! docker exec "$container" sh -c "test -s /etc/ssl/certs/ca-certificates.crt"; then
             log_error "  CA bundle missing at /etc/ssl/certs/ca-certificates.crt"
@@ -385,15 +411,15 @@ writeShellApplication {
         log_info "  ✓ sudoers file validates"
 
         local version_out
-        version_out=$(docker exec -u postgres "$container" sh -c "/usr/bin/pgbackrest version 2>&1") || {
-            log_error "  postgres user cannot run pgbackrest via wrapper: $version_out"
+        version_out=$(docker exec -u postgres "$container" sh -c "timeout 5 /usr/bin/pgbackrest --version 2>&1") || {
+            log_error "  postgres user cannot run pgbackrest --version via wrapper: $version_out"
             exit 1
         }
         if ! echo "$version_out" | grep -qi "pgBackRest"; then
             log_error "  unexpected pgbackrest version output: $version_out"
             exit 1
         fi
-        log_info "  ✓ postgres user can run pgBackRest through wrapper"
+        log_info "  ✓ postgres user can run pgBackRest through wrapper without hanging"
 
         local filtered_out
         filtered_out=$(docker exec -u postgres "$container" sh -c \

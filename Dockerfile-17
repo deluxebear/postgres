@@ -101,6 +101,12 @@ RUN addgroup -S postgres && \
 # Copy Nix store and profiles from builder (profile already created by nix profile install)
 COPY --from=nix-builder /nix /nix
 
+# Keep the real pgBackRest ELF outside the profile before installing the wrapper.
+RUN mkdir -p /usr/lib/pgbackrest/bin && \
+    cp -L /nix/var/nix/profiles/default/bin/pgbackrest /usr/lib/pgbackrest/bin/pgbackrest.real && \
+    chmod 0755 /usr/lib/pgbackrest/bin/pgbackrest.real && \
+    test "$(od -An -tx1 -N4 /usr/lib/pgbackrest/bin/pgbackrest.real | tr -d ' \n')" = "7f454c46"
+
 # Copy groonga plugins
 COPY --from=nix-builder /tmp/groonga-plugins/plugins /usr/lib/groonga/plugins
 
@@ -135,10 +141,15 @@ RUN mkdir -p \
     chown pgbackrest:postgres /var/log/pgbackrest/*.log && \
     chmod 0660 /var/log/pgbackrest/*.log
 
-# Create symbolic links for binaries
+# Create symbolic links for binaries. Keep /usr/bin/pgbackrest reserved for
+# the privilege-dropping wrapper, not the Nix profile binary.
 RUN for f in /nix/var/nix/profiles/default/bin/*; do \
+        name="$(basename "$f")"; \
         ln -sf "$f" /usr/lib/postgresql/bin/ 2>/dev/null || true; \
-        ln -sf "$f" /usr/bin/ 2>/dev/null || true; \
+        case "$name" in \
+            pgbackrest) ;; \
+            *) ln -sf "$f" /usr/bin/ 2>/dev/null || true ;; \
+        esac; \
     done
 
 COPY --chmod=755 docker/pgbackrest/pgbackrest-wrapper.sh /usr/bin/pgbackrest
@@ -176,11 +187,15 @@ RUN chmod 0640 /etc/pgbackrest/pgbackrest.conf /etc/pgbackrest/conf.d/*.conf && 
     ! grep -RE '^[[:space:]]*repo-cipher-pass[[:space:]]*=' /etc/pgbackrest && \
     printf '%s\n' \
       'postgres ALL=(pgbackrest) NOPASSWD: /usr/bin/pgbackrest' \
-      'postgres ALL=(pgbackrest) NOPASSWD: /nix/var/nix/profiles/default/bin/pgbackrest' \
-      'pgbackrest ALL=(pgbackrest) NOPASSWD: /nix/var/nix/profiles/default/bin/pgbackrest' \
+      'postgres ALL=(pgbackrest) NOPASSWD: /usr/lib/pgbackrest/bin/pgbackrest.real' \
+      'pgbackrest ALL=(pgbackrest) NOPASSWD: /usr/lib/pgbackrest/bin/pgbackrest.real' \
       > /etc/sudoers.d/pgbackrest && \
     chmod 0440 /etc/sudoers.d/pgbackrest && \
-    visudo -cf /etc/sudoers.d/pgbackrest
+    visudo -cf /etc/sudoers.d/pgbackrest && \
+    test "$(readlink -f /usr/bin/pgbackrest)" = "/usr/bin/pgbackrest" && \
+    test "$(od -An -tx1 -N4 /usr/lib/pgbackrest/bin/pgbackrest.real | tr -d ' \n')" = "7f454c46" && \
+    test "$(od -An -tx1 -N2 /usr/bin/pgbackrest | tr -d ' \n')" = "2321" && \
+    timeout 5 /usr/bin/pgbackrest --version >/dev/null
 
 # Configure PostgreSQL settings
 RUN sed -i \

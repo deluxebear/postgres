@@ -1,6 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
+PGBACKREST_REAL="/usr/lib/pgbackrest/bin/pgbackrest.real"
+
 sanitized_args=()
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -27,4 +29,4 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-exec sudo -u pgbackrest /nix/var/nix/profiles/default/bin/pgbackrest "${sanitized_args[@]}"
+exec sudo -u pgbackrest "$PGBACKREST_REAL" "${sanitized_args[@]}"

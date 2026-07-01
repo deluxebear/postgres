@@ -181,6 +181,7 @@ jobs:
             nix/checks.nix
             nix/ext/pg_duckdb.nix
             nix/ext/pg_durable.nix
+            nix/packages/docker-image-test.nix
             nix/packages/default.nix
             nix/packages/postgres.nix
             nix/tests/expected/z_17_ext_interface.out
@@ -399,6 +400,7 @@ jobs:
             nix/checks.nix
             nix/ext/pg_duckdb.nix
             nix/ext/pg_durable.nix
+            nix/packages/docker-image-test.nix
             nix/packages/default.nix
             nix/packages/postgres.nix
             nix/tests/expected/z_17_ext_interface.out
