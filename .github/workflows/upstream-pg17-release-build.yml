@@ -11,6 +11,11 @@ on:
         required: false
         default: true
         type: boolean
+      force_rebuild:
+        description: "Rebuild even when the matching GitHub release already exists"
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: "20 2 * * *"
 
@@ -93,8 +98,15 @@ jobs:
               -H "Authorization: Bearer ${GH_TOKEN}" \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${source_tag}")"
 
-            if [ "$GITHUB_EVENT_NAME" = "schedule" ] && [ "$release_status" = "200" ]; then
-              echo "Already released ${source_tag}; skipping scheduled build for ${upstream_ref}"
+            should_skip_released=false
+            if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+              should_skip_released=true
+            elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.force_rebuild }}" != "true" ]; then
+              should_skip_released=true
+            fi
+
+            if [ "$should_skip_released" = "true" ] && [ "$release_status" = "200" ]; then
+              echo "Already released ${source_tag}; skipping build for ${upstream_ref}"
               continue
             fi
 
