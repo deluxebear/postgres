@@ -2,6 +2,13 @@
 
 这个仓库用于在 Supabase Postgres 上维护自定义 PostgreSQL 扩展构建。当前模式是：在本仓库的定制分支中维护扩展补丁，GitHub Action 自动基于 Supabase upstream 最新稳定 PG17 release 签出源码，叠加本仓库的扩展修改，然后构建 Nix 包和多架构 Docker 镜像。
 
+## 当前自定义扩展列表
+
+| 扩展 | 当前版本 | 上游地址 | 接入范围 | 是否预加载 | 说明 |
+| --- | --- | --- | --- | --- | --- |
+| `pg_durable` | `0.2.3` | `https://github.com/microsoft/pg_durable` | `psql_17`、`psql_17_slim`、`psql_orioledb-17`、`psql_orioledb-17_slim` | 是，追加 `pg_durable` | Durable SQL Functions for PostgreSQL，当前作为 PG17 和 OrioleDB17 共享扩展构建。 |
+| `pg_duckdb` | `1.1.1` | `https://github.com/duckdb/pg_duckdb` | `psql_17`、`psql_17_slim` | 是，追加 `pg_duckdb` | DuckDB Embedded in Postgres。当前只接入标准 PG17；暂不接入 OrioleDB17，因为 OrioleDB 的 `TableAmRoutine` ABI 与标准 PostgreSQL 17 不兼容。 |
+
 ## 使用项目技能
 
 本项目提供了一个本地 Codex 技能：
