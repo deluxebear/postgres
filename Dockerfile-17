@@ -218,6 +218,10 @@ COPY migrations/db /docker-entrypoint-initdb.d/
 COPY ansible/files/pgbouncer_config/pgbouncer_auth_schema.sql /docker-entrypoint-initdb.d/init-scripts/00-schema.sql
 COPY ansible/files/stat_extension.sql /docker-entrypoint-initdb.d/migrations/00-extension.sql
 
+# Enable pg_durable during first-time database initialization
+RUN echo "CREATE EXTENSION IF NOT EXISTS pg_durable;" > /docker-entrypoint-initdb.d/init-scripts/00-pre-init.sql && \
+    chown postgres:postgres /docker-entrypoint-initdb.d/init-scripts/00-pre-init.sql
+
 # Add entrypoint script
 ADD --chmod=0755 \
     https://raw.githubusercontent.com/docker-library/postgres/6edb0a8c4def40c371514b34aef9037ec82d9110/17/alpine3.23/docker-entrypoint.sh \

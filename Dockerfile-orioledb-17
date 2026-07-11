@@ -221,8 +221,11 @@ COPY migrations/db /docker-entrypoint-initdb.d/
 COPY ansible/files/pgbouncer_config/pgbouncer_auth_schema.sql /docker-entrypoint-initdb.d/init-scripts/00-schema.sql
 COPY ansible/files/stat_extension.sql /docker-entrypoint-initdb.d/migrations/00-extension.sql
 
-# Enable orioledb extension first
-RUN echo "CREATE EXTENSION orioledb;" > /docker-entrypoint-initdb.d/init-scripts/00-pre-init.sql && \
+# Enable preload-dependent extensions during first-time database initialization
+RUN printf '%s\n' \
+        "CREATE EXTENSION IF NOT EXISTS orioledb;" \
+        "CREATE EXTENSION IF NOT EXISTS pg_durable;" \
+        > /docker-entrypoint-initdb.d/init-scripts/00-pre-init.sql && \
     chown postgres:postgres /docker-entrypoint-initdb.d/init-scripts/00-pre-init.sql
 
 # Add entrypoint script
