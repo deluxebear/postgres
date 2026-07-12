@@ -11,11 +11,6 @@ on:
         required: false
         default: true
         type: boolean
-      force_rebuild:
-        description: "Rebuild even when the matching GitHub release already exists"
-        required: false
-        default: false
-        type: boolean
   schedule:
     - cron: "20 2 * * *"
 
@@ -90,24 +85,23 @@ jobs:
           matrix='{"include":[]}'
           while IFS= read -r item; do
             upstream_ref="$(jq -r '.upstream_ref' <<< "$item")"
-            version_tag="${upstream_ref#v}"
-            source_tag="postgres-${version_tag}"
 
-            release_status="$(curl -sS -o /dev/null -w "%{http_code}" \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer ${GH_TOKEN}" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${source_tag}")"
-
-            should_skip_released=false
+            # Repository updates and manual runs always rebuild the latest
+            # matching upstream releases. Only scheduled runs are no-ops when
+            # this repository has already published the corresponding release.
             if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
-              should_skip_released=true
-            elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.force_rebuild }}" != "true" ]; then
-              should_skip_released=true
-            fi
+              version_tag="${upstream_ref#v}"
+              source_tag="postgres-${version_tag}"
 
-            if [ "$should_skip_released" = "true" ] && [ "$release_status" = "200" ]; then
-              echo "Already released ${source_tag}; skipping build for ${upstream_ref}"
-              continue
+              release_status="$(curl -sS -o /dev/null -w "%{http_code}" \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${source_tag}")"
+
+              if [ "$release_status" = "200" ]; then
+                echo "Already released ${source_tag}; skipping scheduled build for ${upstream_ref}"
+                continue
+              fi
             fi
 
             matrix="$(jq -c --argjson item "$item" '.include += [$item]' <<< "$matrix")"
@@ -115,7 +109,7 @@ jobs:
 
           work_count="$(jq '.include | length' <<< "$matrix")"
           if [ "$work_count" -eq 0 ]; then
-            echo "No new upstream PG17 releases need building for ${GITHUB_EVENT_NAME} event."
+            echo "No new upstream PG17 releases need building for the scheduled run."
             has_work=false
           else
             echo "Releases to build:"
