@@ -11,6 +11,7 @@
     }:
     let
       activeVersion = "15";
+      nixpkgsForSystem = inputs.nixpkgs.legacyPackages.${pkgs.stdenv.hostPlatform.system};
       # Function to create the pg_regress package
       makePgRegress =
         version:
@@ -67,7 +68,21 @@
           migrate-tool = pkgs.callPackage ./migrate-tool.nix { psql_15 = self'.packages."psql_15/bin"; };
           overlayfs-on-package = pkgs.callPackage ./overlayfs-on-package.nix { };
           packer = pkgs.callPackage ./packer.nix { inherit inputs; };
-          pg-backrest = inputs.nixpkgs.legacyPackages.${pkgs.stdenv.hostPlatform.system}.pgbackrest;
+          pg-backrest = nixpkgsForSystem.pgbackrest.overrideAttrs (
+            _oldAttrs:
+            let
+              version = "2.58.0";
+            in
+            {
+              inherit version;
+              src = nixpkgsForSystem.fetchFromGitHub {
+                owner = "pgbackrest";
+                repo = "pgbackrest";
+                tag = "release/${version}";
+                hash = "sha256-RxvVqThfGnTCWTaM54Job+2HgJ7baf6ciFYTz496aKQ=";
+              };
+            }
+          );
           pgctld = pkgs.callPackage ./pgctld.nix {
             multigres-src = inputs.multigres;
           };
