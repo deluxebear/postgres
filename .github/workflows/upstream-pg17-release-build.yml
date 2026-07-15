@@ -425,15 +425,30 @@ jobs:
           test -f upstream/docker/pgbackrest/pgbackrest-wrapper.sh
           grep -R 'version = "2.58.0"' upstream/nix/packages/default.nix
 
+          # GITHUB_TOKEN cannot push a new ref that introduces workflow changes.
+          # Keep the release snapshot's workflows identical to this already-trusted
+          # fork commit, and make that commit the parent of the source snapshot.
+          rm -rf upstream/.github/workflows
+          cp -a .workflow/.github/workflows upstream/.github/workflows
+
           git -C upstream config user.name "github-actions[bot]"
           git -C upstream config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git -C upstream add -A
-          git -C upstream commit \
+          git -C upstream fetch --no-tags --update-shallow ../.workflow "$GITHUB_SHA"
+
+          source_tree="$(git -C upstream write-tree)"
+          source_sha="$(git -C upstream commit-tree "$source_tree" \
+            -p "$GITHUB_SHA" \
             -m "Apply custom extension changes to ${{ matrix.release.upstream_ref }}" \
             -m "Upstream: supabase/postgres@${upstream_sha}" \
-            -m "Extension source: ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
+            -m "Extension source: ${GITHUB_REPOSITORY}@${GITHUB_SHA}")"
 
-          source_sha="$(git -C upstream rev-parse HEAD)"
+          if ! git -C upstream diff --quiet "$GITHUB_SHA" "$source_sha" -- .github/workflows; then
+            echo "Source snapshot unexpectedly changes .github/workflows" >&2
+            git -C upstream diff --stat "$GITHUB_SHA" "$source_sha" -- .github/workflows >&2
+            exit 1
+          fi
+
           git -C upstream tag -f "$source_tag" "$source_sha"
           git -C upstream push \
             "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
