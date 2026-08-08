@@ -1,4 +1,0 @@
-interface:
-  display_name: "Postgres Custom Extension Build"
-  short_description: "Build project-local PostgreSQL extensions"
-  default_prompt: "Use $postgres-custom-extension-build to add a custom PostgreSQL extension to this project and wire it into the release build."
