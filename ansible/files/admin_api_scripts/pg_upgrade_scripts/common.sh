@@ -10,6 +10,10 @@ if [ -f "$REPORTING_CREDENTIALS_FILE" ]; then
 	REPORTING_ANON_KEY=$(cat "$REPORTING_CREDENTIALS_FILE")
 fi
 
+function log {
+	echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') $*"
+}
+
 # shellcheck disable=SC2120
 # Arguments are passed in other files
 function run_sql {
@@ -42,6 +46,27 @@ function ship_logs {
 		-H "apikey: ${REPORTING_ANON_KEY}" \
 		-H 'Content-type: application/json' \
 		-d "$BODY"
+}
+
+# Aborts if / has less than required_kb free. Nix realizes the new pg_upgrade
+# store path onto / before the mounted data disk is touched, so a full root
+# partition otherwise fails the upgrade mid-flight instead of at the start.
+function check_free_space {
+	local required_kb=$1
+	local available_kb
+	# -P forces POSIX single-line output; plain `df -k` wraps onto a second
+	# line when the source device name is long, which would misalign NR==2.
+	available_kb=$(df -Pk / | awk 'NR==2 {print $4}')
+
+	if ! [[ $available_kb =~ ^[0-9]+$ ]]; then
+		echo "ERROR: could not determine free space on /; aborting upgrade."
+		return 1
+	fi
+
+	if ((available_kb < required_kb)); then
+		echo "ERROR: only ${available_kb}KB free on / but ${required_kb}KB required; aborting upgrade."
+		return 1
+	fi
 }
 
 function retry {
