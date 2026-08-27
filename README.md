@@ -23,19 +23,23 @@ $postgres-custom-extension-build
 .codex/skills/postgres-custom-extension-build/
 ```
 
-当需要引入新的自定义扩展时，直接这样提需求：
+当需要引入或升级自定义扩展时，可以直接这样提需求：
 
 ```text
 Use $postgres-custom-extension-build to add <extension-name> to PostgreSQL 17.
+Use $postgres-custom-extension-build to update <extension-name> to its latest stable release for PostgreSQL 17 and OrioleDB 17.
 ```
 
 这个技能会引导 Codex 按本项目约定处理：
 
+- 对每个指定扩展检查其官方 GitHub 仓库的最新稳定 release
+- 分别验证标准 PostgreSQL 与 OrioleDB 目标兼容性，通过后才更新版本
 - 在专门分支维护自定义扩展代码
 - 添加 `nix/ext/<extension>.nix`
 - 将扩展接入 `psql_17`，并在确认兼容时接入 `psql_orioledb-17`
 - 正确处理 `shared_preload_libraries`
 - 更新 Dockerfile、Ansible、pgctld 模板和测试快照
+- 同步更新 README 中的版本、目标范围、预加载要求和兼容性说明
 - 通过 GitHub Action 基于 upstream release 重新构建
 - 发布 Docker Hub 镜像和对应 GitHub Release
 
@@ -45,13 +49,15 @@ Use $postgres-custom-extension-build to add <extension-name> to PostgreSQL 17.
 .codex/skills/postgres-custom-extension-build/scripts/check_repo_state.sh
 ```
 
-## 自定义扩展接入流程
+## 自定义扩展接入与升级流程
 
 推荐在定制分支上工作：
 
 ```bash
 git checkout custom-extensions/pg-durable
 ```
+
+升级已有扩展时，先从扩展的官方 GitHub Releases 确认最新稳定版本，排除 draft、prerelease、RC、preview 和 nightly 版本；再检查 release notes、上游 PostgreSQL 支持声明及构建配置，并对标准 PG17 与 OrioleDB17 分别构建和测试。只有所有请求目标都通过兼容性验证后才更新版本、源码与依赖哈希、必要的升级脚本及下方扩展列表。若某个目标不兼容，保留当前版本和接入范围并说明阻塞原因，不静默降级、拆分版本或移除目标。
 
 新增扩展时，通常需要完成这些修改：
 

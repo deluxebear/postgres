@@ -1,5 +1,23 @@
 # Project Patterns
 
+## GitHub Release Discovery And Compatibility Gate
+
+For each extension explicitly named by the user:
+
+1. Resolve the official GitHub repository from the existing Nix source, project README, or the user's input. Cross-check repository ownership before using a similarly named project.
+2. Inspect the repository's Releases list or GitHub API, not only a package registry or search result. Exclude drafts, GitHub prereleases, and versions identified by upstream as alpha, beta, RC, preview, development, or nightly builds. Respect an upstream version scheme when it is not semantic versioning.
+3. Compare the latest stable release with every version or revision currently selected by `nix/ext/versions.json`, the extension's Nix expression, `ansible/vars.yml`, `common-nix.vars.yml`, and relevant documentation. Record the chosen release tag, URL, and publication date.
+4. Read release notes from the current version through the candidate version for PostgreSQL support changes, breaking SQL/API changes, upgrade scripts, dependency/toolchain changes, new preload requirements, configuration changes, and data migration or dump/restore warnings.
+5. Establish compatibility separately for each requested target (for example, standard PG17 and OrioleDB17). Use evidence in this order:
+   - upstream's support matrix, README, release notes, or maintained documentation
+   - the exact release's build metadata and CI matrix, such as `Cargo.toml`, pgrx features, `pg_config` checks, Makefiles, and tested PostgreSQL majors
+   - a build plus extension install/upgrade tests against the repository's exact target package
+6. Treat upstream support claims as necessary evidence, not a substitute for a local build. Treat a successful standard PostgreSQL build as no evidence of OrioleDB ABI compatibility. For OrioleDB, inspect any PostgreSQL server API or ABI touched by the extension and run its OrioleDB target build and tests independently.
+
+The gate passes only when the exact candidate release can be packaged reproducibly and the relevant build and extension lifecycle tests pass for every requested target. A small source or packaging adaptation is acceptable when it is scoped, maintainable, and covered by tests. Do not carry a speculative compatibility patch, silently downgrade from the latest stable release, drop an existing target, or update only part of the requested target set without the user's approval.
+
+If no stable GitHub release exists, the repository is archived/unverifiable, upstream excludes a requested PostgreSQL target, the required adaptation is invasive, or validation fails, retain the current pin and report the current version, candidate version, compatibility evidence, failing target, and recommended next decision.
+
 ## Branch And Patch Model
 
 Use a dedicated branch for custom extension work, currently `custom-extensions/pg-durable`.
@@ -40,6 +58,27 @@ The package should expose extension files under standard PostgreSQL paths:
 - `share/postgresql/extension`
 
 If an extension needs preload, set extension metadata or package passthrough consistently with local patterns, but still wire runtime config where this repository expects it.
+
+For upgrades, follow the extension's existing package structure:
+
+- For `versions.json` packages, add the new release entry with its exact supported PostgreSQL majors and fixed hash; preserve prior versions needed for upgrade testing.
+- For direct Nix expressions, update every source version/revision and fixed-output hash consistently.
+- For Rust/pgrx packages, derive the pgrx and Rust toolchain requirements from the candidate release, refresh Cargo inputs or hashes, and retain `previouslyPackagedVersions` entries needed to validate SQL upgrade paths.
+- Remove or refresh local patches only after checking whether the upstream release incorporated them. Keep any remaining patch narrow and document why it is still needed.
+
+See `nix/docs/update-extension.md` for this repository's detailed versioned-package and legacy-package procedures.
+
+## README Synchronization
+
+After a compatible release is actually selected and packaged, update the root `README.md` and any extension-specific README or docs affected by the change. At minimum keep these facts aligned with the code:
+
+- current stable extension version and official GitHub repository
+- standard PostgreSQL and OrioleDB package targets that actually passed the gate
+- preload and runtime configuration requirements
+- compatibility exclusions and their concrete reason
+- versioned commands, examples, release notes, or file paths that changed
+
+Do not update a documented version merely because a newer GitHub release exists; the README must describe the version that is pinned and validated in the repository.
 
 ## shared_preload_libraries
 
