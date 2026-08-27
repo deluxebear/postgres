@@ -14,6 +14,7 @@
 - `pg_durable 0.2.6` 是官方 GitHub 于 2026-08-24 发布的最新稳定版本，release 见 [v0.2.6](https://github.com/microsoft/pg_durable/releases/tag/v0.2.6)。上游源码继续使用 pgrx `0.16.1`，保留 `pg17` 构建特性，并提供 `pg_durable--0.2.5--0.2.6.sql` 升级路径。
 - 升级到 `pg_durable 0.2.6` 前，应检查是否存在依赖未公开函数 `df.ensure_durofut(text)` 的自定义对象；该函数已在此版本移除。应用不应持久化内部 `Durofut` JSON envelope 后跨版本回放。
 - `pg_duckdb 1.1.1` 仍是官方 GitHub 最新稳定版本，因此本次不改变其 pin 或接入范围。
+- `pg_durable` 的 Cargo 依赖通过 crates.io 官方静态下载地址获取，避开 API 下载端点的 HTTP 403；仍使用上游 `Cargo.lock` 中的固定版本和 SHA-256 校验和。
 - 按本次执行要求不在本地构建；标准 PG17、OrioleDB17 以及 amd64/arm64 的实际构建由 `.github/workflows/upstream-pg17-release-build.yml` 验证。
 
 ## 使用项目技能

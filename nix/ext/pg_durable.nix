@@ -38,6 +38,11 @@ let
     CARGO = "${cargo}/bin/cargo";
 
     cargoLock = {
+      # Match crates.io's official index config: the API download endpoint can
+      # reject CI requests with HTTP 403. Keep Cargo.lock checksums unchanged.
+      extraRegistries = {
+        "https://github.com/rust-lang/crates.io-index" = "https://static.crates.io/crates";
+      };
       lockFile = fetchurl {
         url = "https://raw.githubusercontent.com/microsoft/pg_durable/v${version}/Cargo.lock";
         hash = "sha256-p5lpbmzGIEEKqvUxSOSmP8hxD7B93/YC1yVCPVHPZEw=";
