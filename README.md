@@ -15,7 +15,7 @@
 - 升级到 `pg_durable 0.2.6` 前，应检查是否存在依赖未公开函数 `df.ensure_durofut(text)` 的自定义对象；该函数已在此版本移除。应用不应持久化内部 `Durofut` JSON envelope 后跨版本回放。
 - `pg_duckdb 1.1.1` 仍是官方 GitHub 最新稳定版本，因此本次不改变其 pin 或接入范围。
 - `pg_durable` 的 Cargo 依赖通过 crates.io 官方静态下载地址获取，避开 API 下载端点的 HTTP 403；仍使用上游 `Cargo.lock` 中的固定版本和 SHA-256 校验和。
-- 按本次执行要求不在本地构建；标准 PG17、OrioleDB17 以及 amd64/arm64 的实际构建由 `.github/workflows/upstream-pg17-release-build.yml` 验证。
+- 2026-08-27 已通过 [GitHub Actions 四目标 Nix 构建验证](https://github.com/deluxebear/postgres/actions/runs/33070095109)：标准 PG17（`17.6.1.166`）与 OrioleDB17（`17.9.0.019-orioledb`）的 amd64/arm64 全部成功，构建源码提交为 `1754369`。本轮使用 `build_docker=false`，未进行本地构建、镜像发布或 Release tag 更新；未运行数据库安装、升级及 dump/restore 回归测试。
 
 ## 使用项目技能
 
