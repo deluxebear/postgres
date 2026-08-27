@@ -6,8 +6,15 @@
 
 | 扩展 | 当前版本 | 上游地址 | 接入范围 | 是否预加载 | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| `pg_durable` | `0.2.3` | `https://github.com/microsoft/pg_durable` | `psql_17`、`psql_17_slim`、`psql_orioledb-17`、`psql_orioledb-17_slim` | 是，追加 `pg_durable` | Durable SQL Functions for PostgreSQL，当前作为 PG17 和 OrioleDB17 共享扩展构建。 |
+| `pg_durable` | `0.2.6` | `https://github.com/microsoft/pg_durable` | `psql_17`、`psql_17_slim`、`psql_orioledb-17`、`psql_orioledb-17_slim` | 是，追加 `pg_durable` | Durable SQL Functions for PostgreSQL。上游明确支持 PG17/PG18；本仓库将其作为标准 PG17 和 OrioleDB17 共享扩展构建。 |
 | `pg_duckdb` | `1.1.1` | `https://github.com/duckdb/pg_duckdb` | `psql_17`、`psql_17_slim` | 是，追加 `pg_duckdb` | DuckDB Embedded in Postgres。当前只接入标准 PG17；暂不接入 OrioleDB17，因为 OrioleDB 的 `TableAmRoutine` ABI 与标准 PostgreSQL 17 不兼容。 |
+
+### 当前版本说明
+
+- `pg_durable 0.2.6` 是官方 GitHub 于 2026-08-24 发布的最新稳定版本，release 见 [v0.2.6](https://github.com/microsoft/pg_durable/releases/tag/v0.2.6)。上游源码继续使用 pgrx `0.16.1`，保留 `pg17` 构建特性，并提供 `pg_durable--0.2.5--0.2.6.sql` 升级路径。
+- 升级到 `pg_durable 0.2.6` 前，应检查是否存在依赖未公开函数 `df.ensure_durofut(text)` 的自定义对象；该函数已在此版本移除。应用不应持久化内部 `Durofut` JSON envelope 后跨版本回放。
+- `pg_duckdb 1.1.1` 仍是官方 GitHub 最新稳定版本，因此本次不改变其 pin 或接入范围。
+- 按本次执行要求不在本地构建；标准 PG17、OrioleDB17 以及 amd64/arm64 的实际构建由 `.github/workflows/upstream-pg17-release-build.yml` 验证。
 
 ## 使用项目技能
 
