@@ -6,6 +6,7 @@
   postgresql,
   callPackages,
   rust-bin,
+  rustPlatform,
   openssl,
 }:
 
@@ -37,12 +38,22 @@ let
 
     CARGO = "${cargo}/bin/cargo";
 
-    cargoLock = {
-      # Match crates.io's official index config: the API download endpoint can
-      # reject CI requests with HTTP 403. Keep Cargo.lock checksums unchanged.
-      extraRegistries = {
-        "https://github.com/rust-lang/crates.io-index" = "https://static.crates.io/crates";
-      };
+    # Use the official static download endpoint without adding another Cargo
+    # registry: extraRegistries would duplicate the built-in crates-io source.
+    # Only the URL changes; importCargoLock still checks upstream checksums.
+    cargoDeps = (rustPlatform.importCargoLock.override {
+      fetchurl =
+        args:
+        fetchurl (
+          args
+          // {
+            url = lib.replaceStrings
+              [ "https://crates.io/api/v1/crates/" ]
+              [ "https://static.crates.io/crates/" ]
+              args.url;
+          }
+        );
+    }) {
       lockFile = fetchurl {
         url = "https://raw.githubusercontent.com/microsoft/pg_durable/v${version}/Cargo.lock";
         hash = "sha256-p5lpbmzGIEEKqvUxSOSmP8hxD7B93/YC1yVCPVHPZEw=";
