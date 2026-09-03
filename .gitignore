@@ -3,12 +3,6 @@
 !.gitignore
 !.gitkeep
 !/.claude/
-!/.codex/
-/.codex/*
-!/.codex/skills/
-/.codex/skills/*
-!/.codex/skills/postgres-custom-extension-build/
-!/.codex/skills/postgres-custom-extension-build/**
 !/.coderabbit.yaml
 !/.envrc.recommended
 !/.github/
@@ -17,6 +11,9 @@
 
 # ansible related
 ansible/image-manifest*.json
+
+# packer related
+packer-work-*/
 
 # python related
 *$py.class
@@ -27,5 +24,4 @@ venv/
 #nix related
 common-nix.vars.pkr.hcl
 db/schema.sql
-nixos.qcow2
 result*

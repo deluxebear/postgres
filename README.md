@@ -1,305 +1,370 @@
-# PostgreSQL 自定义扩展构建说明
+# Getting Started with Supabase Postgres
 
-这个仓库用于在 Supabase Postgres 上维护自定义 PostgreSQL 扩展构建。当前模式是：在本仓库的定制分支中维护扩展补丁，GitHub Action 自动基于 Supabase upstream 最新稳定 PG17 release 签出源码，叠加本仓库的扩展修改，然后构建 Nix 包和多架构 Docker 镜像。
 
-## 当前自定义扩展列表
+This guide covers getting up and running with Supabase Postgres. After reading this guide, you will understand:
 
-| 扩展 | 当前版本 | 上游地址 | 接入范围 | 是否预加载 | 说明 |
-| --- | --- | --- | --- | --- | --- |
-| `pg_durable` | `0.2.7` | `https://github.com/microsoft/pg_durable` | `psql_17`、`psql_17_slim`、`psql_orioledb-17`、`psql_orioledb-17_slim` | 是，追加 `pg_durable` | Durable SQL Functions for PostgreSQL。上游明确支持 PG17/PG18；本仓库将其作为标准 PG17 和 OrioleDB17 共享扩展构建。 |
-| `pg_duckdb` | `1.1.1` | `https://github.com/duckdb/pg_duckdb` | `psql_17`、`psql_17_slim` | 是，追加 `pg_duckdb` | DuckDB Embedded in Postgres。当前只接入标准 PG17；暂不接入 OrioleDB17，因为 OrioleDB 的 `TableAmRoutine` ABI 与标准 PostgreSQL 17 不兼容。 |
+* What Supabase Postgres provides and why you might want to use it
+* How the project is organized and what each directory contains
+* How to build and run Postgres with extensions locally
+* The basics of working with the extension ecosystem
 
-### 当前版本说明
+---
 
-- `pg_durable 0.2.7` 是官方 GitHub 于 2026-09-01 发布的最新稳定版本，release 见 [v0.2.7](https://github.com/microsoft/pg_durable/releases/tag/v0.2.7)。上游源码继续使用 pgrx `0.16.1`，保留 `pg17` 构建特性，并提供 `pg_durable--0.2.6--0.2.7.sql` 升级路径。
-- `pg_durable 0.2.7` 新增 `pg_durable.host` 配置，限制模式下的 HTTP 请求现在强制使用 HTTPS，并统一使用规范化 URL 完成校验和传输以修复 allow-list 绕过；工作连接也会原样保留需要引用的数据库角色名。
-- 从 `0.2.5` 或更早版本升级时，应检查是否存在依赖未公开函数 `df.ensure_durofut(text)` 的自定义对象；该函数已在 `0.2.6` 移除。应用不应持久化内部 `Durofut` JSON envelope 后跨版本回放。
-- `pg_duckdb 1.1.1` 仍是官方 GitHub 最新稳定版本，因此本次不改变其 pin 或接入范围。
-- `pg_durable` 的 Cargo 依赖通过 crates.io 官方静态下载地址获取，避开 API 下载端点的 HTTP 403；仍使用上游 `Cargo.lock` 中的固定版本和 SHA-256 校验和。
-- 2026-08-27 已对 `pg_durable 0.2.6` 完成 [GitHub Actions 四目标 Nix 构建验证](https://github.com/deluxebear/postgres/actions/runs/33070095109)：标准 PG17（`17.6.1.166`）与 OrioleDB17（`17.9.0.019-orioledb`）的 amd64/arm64 全部成功，构建源码提交为 `1754369`。本轮使用 `build_docker=false`，未进行本地构建、镜像发布或 Release tag 更新；未运行数据库安装、升级及 dump/restore 回归测试。
+## What is Supabase Postgres?
 
-## 使用项目技能
+Supabase Postgres is a batteries-included PostgreSQL distribution that provides unmodified PostgreSQL with a curated set of the most useful extensions pre-installed. Think of it as PostgreSQL with superpowers - you get the reliability and power of standard PostgreSQL, plus immediate access to extensions for tasks like:
 
-本项目提供了一个本地 Codex 技能：
+* Full-text search and indexing
+* Geospatial data processing
+* Time-series data management
+* JSON validation and GraphQL support
+* Cryptography and security
+* Message queuing
+* And much more
 
-```text
-$postgres-custom-extension-build
-```
+The goal is simple: make it fast and easy to get started with a production-ready PostgreSQL setup without having to hunt down, compile, and configure dozens of extensions yourself.
 
-技能位置：
+## Philosophy
 
-```text
-.codex/skills/postgres-custom-extension-build/
-```
+Supabase Postgres follows these core principles:
 
-当需要引入或升级自定义扩展时，可以直接这样提需求：
+1. **Unmodified PostgreSQL** - We don't fork or modify PostgreSQL itself. You get standard PostgreSQL with extensions.
+2. **Curated Extensions** - We include well-maintained, production-tested extensions that solve real problems.
+3. **Multi-version Support** - Currently supporting PostgreSQL 15, 17, and OrioleDB-17.
+4. **Ready for Production** - Configured with sensible defaults for replication, security, and performance.
+5. **Open Source** - Everything is open source and can be self-hosted.
 
-```text
-Use $postgres-custom-extension-build to add <extension-name> to PostgreSQL 17.
-Use $postgres-custom-extension-build to update <extension-name> to its latest stable release for PostgreSQL 17 and OrioleDB 17.
-```
+## Directory Structure
 
-这个技能会引导 Codex 按本项目约定处理：
+Here's a comprehensive overview of the project's directory structure:
 
-- 对每个指定扩展检查其官方 GitHub 仓库的最新稳定 release
-- 分别验证标准 PostgreSQL 与 OrioleDB 目标兼容性，通过后才更新版本
-- 在专门分支维护自定义扩展代码
-- 添加 `nix/ext/<extension>.nix`
-- 将扩展接入 `psql_17`，并在确认兼容时接入 `psql_orioledb-17`
-- 正确处理 `shared_preload_libraries`
-- 更新 Dockerfile、Ansible、pgctld 模板和测试快照
-- 同步更新 README 中的版本、目标范围、预加载要求和兼容性说明
-- 通过 GitHub Action 基于 upstream release 重新构建
-- 发布 Docker Hub 镜像和对应 GitHub Release
+| File/Directory | Purpose |
+| -------------- | ------- |
+| **nix/** | Core build system directory containing all Nix expressions for building PostgreSQL and extensions |
+| nix/postgresql/ | PostgreSQL version configurations, patches, and base package definitions |
+| nix/ext/ | Individual extension package definitions and build configurations |
+| nix/ext/wrappers/ | Wrapper scripts and utilities for extensions |
+| nix/ext/tests/ | Extension-specific integration test suites implemented using nixos-test|
+| nix/overlays/ | Nix overlays for customizing and overriding package definitions |
+| nix/tools/ | Build tools, utilities, and helper scripts |
+| nix/docker/ | Docker image build definitions using Nix |
+| nix/tests/ | postgres specific test suites for validating builds, including pg_regress tests |
+| nix/tests/smoke/ | Quick smoke tests for basic functionality |
+| nix/tests/migrations/ | Migration and upgrade test scenarios |
+| nix/tests/expected/ | Expected `pg_regress` test outputs for validation |
+| nix/tests/sql/ | SQL test scripts that are run in `pg_regress` tests |
+| nix/docs/ | Build system documentation |
+| **ansible/** | Infrastructure as Code for server configuration and deployment of production hosted AWS AMI image |
+| ansible/playbook.yml | Main Ansible playbook for PostgreSQL/PostgREST/pgbouncer/Auth server setup |
+| ansible/tasks/ | Modular Ansible tasks for specific configuration steps |
+| ansible/files/ | Static files, scripts, and templates used by Ansible |
+| ansible/vars.yml | AMI version tracking, legacy package version tracking |
+| **migrations/** | Database migration management and upgrade tools |
+| migrations/db/ | Database schema migrations |
+| migrations/db/migrations/ | Individual migration files |
+| migrations/db/init-scripts/ | Database initialization scripts |
+| migrations/tests/ | Migration testing infrastructure |
+| migrations/tests/database/ | Database-specific migration tests |
+| migrations/tests/storage/ | Storage-related migration tests |
+| migrations/tests/extensions/ | Extension migration tests |
+| Dockerfile-15 | Docker image definition for PostgreSQL 15 |
+| Dockerfile-17 | Docker image definition for PostgreSQL 17 |
+| Dockerfile-supabase | Parameterised supabase base image (supports any PostgreSQL major version via `--build-arg PG_VERSION=17`) |
+| Dockerfile-multigres | Multigres image layered on top of `Dockerfile-supabase` |
+| **tests/** | Integration and system tests |
+| testinfra/ | Infrastructure tests using pytest framework |
+| tests/ | General integration test suites |
+| **docs/** | Additional documentation, images, and resources |
+| **ebssurrogate/** | AWS EBS surrogate building for AMI creation |
+| **http/** | HTTP-related configurations and files |
+| **rfcs/** | Request for Comments - design documents and proposals |
+| **db/** | Database-related utilities and configurations |
+| **.github/** | GitHub-specific configurations (Actions, templates, etc.) |
+| **Root Config Files** |  |
+| .gitignore | Git ignore patterns |
+| .envrc.recommended | Recommended environment variables for development |
+| amazon-arm64-nix.pkr.hcl | Packer configuration for AWS ARM64 builds |
+| common-nix.vars.pkr.hcl | Common Packer variables |
+| development-arm64.vars.pkr.hcl | ARM development environment variables |
+| CONTRIBUTING.md | Contribution guidelines |
+| README.md | Main project documentation |
 
-开始前可以运行技能自带检查脚本：
+## Key Concepts
+
+### Extensions
+
+Extensions are the superpower of PostgreSQL. They add functionality without modifying the core database. Supabase Postgres includes dozens of pre-built extensions covering:
+
+* **Data Types & Validation** - pg_jsonschema, pg_hashids
+* **Search & Indexing** - pgroonga, rum, hypopg
+* **Geospatial** - PostGIS, pgrouting
+* **Time-series** - TimescaleDB
+* **Security** - pgsodium, vault, pgaudit
+* **Development** - pgtap, plpgsql_check
+* **And many more...**
+
+### Multi-version Support
+
+The project supports multiple PostgreSQL versions simultaneously:
+
+* **PostgreSQL 15** - Stable, battle-tested version
+* **PostgreSQL 17** - Latest features and improvements
+* **OrioleDB-17** - Experimental storage engine for PostgreSQL 17
+
+Each version has its own set of compatible extensions defined in the Nix build system.
+
+### Build System (Nix)
+
+The project uses Nix as its build system, which provides:
+
+* **Reproducible Builds** - Same input always produces the same output
+* **Declarative Configuration** - Define what you want, not how to build it
+* **Dependency Management** - Automatic handling of complex dependency trees
+* **Cross-platform Support** - Build for Linux, macOS, and more
+
+## Common Tasks
+
+To skip hours of building and download packages instead, start using the Supabase Postgres Nix binary cache: [nix/docs/binary-cache.md](nix/docs/binary-cache.md).
+
+### Building Locally
+
+To build PostgreSQL with extensions locally:
 
 ```bash
-.codex/skills/postgres-custom-extension-build/scripts/check_repo_state.sh
+# Build PostgreSQL 15 with extensions
+nix build .#psql_15/bin
+
+# Build PostgreSQL 17
+nix build .#psql_17/bin
+
+# Build a specific extension
+nix build .#psql_17/exts/pg_graphql
 ```
 
-## 自定义扩展接入与升级流程
-
-推荐在定制分支上工作：
+### Running Tests
 
 ```bash
-git checkout custom-extensions/pg-durable
+# Run all tests
+nix flake check -L
+
+# Run specific test suite (for macos apple silicon for example)
+nix build .#checks.aarch64-darwin.psql_17 -L
 ```
 
-升级已有扩展时，先从扩展的官方 GitHub Releases 确认最新稳定版本，排除 draft、prerelease、RC、preview 和 nightly 版本；再检查 release notes、上游 PostgreSQL 支持声明及构建配置，并对标准 PG17 与 OrioleDB17 分别构建和测试。只有所有请求目标都通过兼容性验证后才更新版本、源码与依赖哈希、必要的升级脚本及下方扩展列表。若某个目标不兼容，保留当前版本和接入范围并说明阻塞原因，不静默降级、拆分版本或移除目标。
-
-新增扩展时，通常需要完成这些修改：
-
-1. 在 `nix/ext/` 下添加扩展 Nix 包，例如：
-
-```text
-nix/ext/pg_durable.nix
-```
-
-2. 在 `nix/packages/postgres.nix` 中加入目标扩展集合。
-
-当前 PG17 扩展按兼容性拆分。
-
-只适用于标准 PostgreSQL 17 的扩展使用：
-
-```nix
-pg17StandardOnlyExtensions = [
-  ../ext/pg_duckdb.nix
-];
-```
-
-同时适用于标准 PostgreSQL 17 和 OrioleDB17 的扩展使用：
-
-```nix
-pg17SharedExtensions = [
-  ../ext/pg_durable.nix
-];
-```
-
-`pg17StandardOnlyExtensions` 会被加入：
-
-```text
-psql_17
-psql_17_slim
-```
-
-`pg17SharedExtensions` 会被加入：
-
-```text
-psql_17
-psql_17_slim
-psql_orioledb-17
-psql_orioledb-17_slim
-```
-
-例如：`pg_duckdb v1.1.1` 可以编入标准 PG17，但当前不能直接编入 OrioleDB17，因为 OrioleDB 的 `TableAmRoutine` ABI 和标准 PostgreSQL 17 不一致；`pg_durable` 当前继续作为共享扩展编入两类 PG17 构建。
-
-3. 如果扩展需要预加载，追加到 `shared_preload_libraries`，不要覆盖已有值。
-
-重点检查这些文件：
-
-```text
-nix/tools/run-server.sh.in
-ansible/tasks/stage2-setup-postgres.yml
-Dockerfile-17
-Dockerfile-orioledb-17
-Dockerfile-multigres
-docker/pgctld/postgresql.conf.tmpl
-docker/pgctld/orioledb-postgresql.conf.tmpl
-```
-
-4. 如果扩展改变了可见 SQL 接口，更新 `nix/tests/sql/` 和 `nix/tests/expected/` 中对应 PG17 和 OrioleDB17 的测试快照。
-
-5. 确认 GitHub Action 的 `patch_paths` 包含新增或修改的文件：
-
-```text
-.github/workflows/upstream-pg17-release-build.yml
-```
-
-## 构建方式
-
-核心 Action：
-
-```text
-.github/workflows/upstream-pg17-release-build.yml
-```
-
-它会自动：
-
-- 从 `supabase/postgres` releases 中选择最新稳定 PG17 release
-- 排除 draft、prerelease 和包含 `test` 的 release
-- 分别选择标准 PG17 和 OrioleDB17
-- checkout upstream release 源码
-- 将本分支的自定义扩展 patch 应用到 upstream 源码树
-- 在原生架构 runner 上执行 Nix build
-- 构建并推送 Docker Hub 镜像
-- 创建指向 patched upstream source commit 的 GitHub Release
-
-架构构建方式：
-
-```text
-amd64 -> ubuntu-latest
-arm64 -> ubuntu-24.04-arm
-```
-
-不会使用 QEMU 进行 ARM64 Nix 构建。
-
-## Docker 镜像发布
-
-GitHub 仓库需要配置：
-
-```text
-secrets.DOCKER_USERNAME
-secrets.DOCKER_PASSWORD
-```
-
-可选配置：
-
-```text
-vars.DOCKERHUB_REPOSITORY
-```
-
-如果没有设置 `DOCKERHUB_REPOSITORY`，默认推送到：
-
-```text
-${DOCKER_USERNAME}/postgres
-```
-
-镜像 tag 不包含扩展名。示例：
-
-```text
-<repo>:17.6.1.141
-<repo>:17
-<repo>:17.6.0.098-orioledb
-<repo>:orioledb-17
-```
-
-中间架构 tag 用于合并 multi-arch manifest：
-
-```text
-<repo>:17.6.1.141-amd64
-<repo>:17.6.1.141-arm64
-<repo>:17.6.0.098-orioledb-amd64
-<repo>:17.6.0.098-orioledb-arm64
-```
-
-## 手动触发 Action
-
-在 GitHub Actions 页面选择：
-
-```text
-Build Upstream PG17 Release with custom extensions
-```
-
-然后点击 `Run workflow`。
-
-也可以用 GitHub CLI 查看运行状态：
+### Creating Docker Images
 
 ```bash
-gh run list --repo deluxebear/postgres --branch custom-extensions/pg-durable --limit 8
-gh run view <run-id> --repo deluxebear/postgres --json status,conclusion,jobs,url
+# Build Docker image for PostgreSQL 15
+docker build -f Dockerfile-15 -t supabase-postgres:15 .
+
+# Build Docker image for PostgreSQL 17
+docker build -f Dockerfile-17 -t supabase-postgres:17 .
 ```
 
-## 本地 Docker Build
+#### Supabase base image (version-parameterised)
 
-本地构建标准 PG17：
+`Dockerfile-supabase` is a single Dockerfile that can target any supported PostgreSQL major version via `--build-arg`:
 
 ```bash
-docker build -f Dockerfile-17 -t postgres:17-custom .
+# Build for PostgreSQL 17 (default)
+docker build -f Dockerfile-supabase -t supabase-postgres:17 .
+
+# Build for PostgreSQL 15
+docker build -f Dockerfile-supabase --build-arg PG_VERSION=15 -t supabase-postgres:15 .
 ```
 
-本地构建 OrioleDB17：
+#### Multigres image
+
+`Dockerfile-multigres` layers on top of the supabase image, adding `pgctld` and `pgbackrest`. Build the supabase image first, then point `SUPABASE_IMAGE` at it:
 
 ```bash
-docker build -f Dockerfile-orioledb-17 -t postgres:orioledb-17-custom .
+# Build supabase base, then multigres on top
+docker build -f Dockerfile-supabase -t supabase-postgres:17 .
+docker build -f Dockerfile-multigres -t multigres:17 .
+
+# Target a different PostgreSQL version
+docker build -f Dockerfile-supabase --build-arg PG_VERSION=15 -t supabase-postgres:15 .
+docker build -f Dockerfile-multigres \
+    --build-arg SUPABASE_IMAGE=supabase-postgres:15 \
+    -t multigres:15 .
 ```
 
-本地构建 multigres 变体：
+## Next Steps
 
-```bash
-docker build -f Dockerfile-multigres --target variant-17 -t multigres:17-custom .
-docker build -f Dockerfile-multigres --target variant-orioledb-17 -t multigres:orioledb-17-custom .
-```
+Now that you understand the basics of Supabase Postgres:
 
-多架构本地构建需要 Docker Buildx：
+* Check the [build guide](nix/docs/build-postgres.md) and [Docker docs](nix/docs/docker.md) for deployment options
+* Explore the [Extension Documentation](#) to learn about available extensions
+* Review [Contributing Guidelines](CONTRIBUTING.md) if you want to contribute
+* Join the [Supabase Community](https://github.com/supabase/postgres/discussions) for questions and discussions
 
-```bash
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  -f Dockerfile-17 \
-  -t <repo>:17-local \
-  --push \
-  .
-```
+## Getting Help
 
-本地多架构构建如果不是原生 ARM64，会走 QEMU，可能比 GitHub 原生 ARM64 runner 慢，也可能遇到 Nix/seccomp 兼容问题。正式发布建议使用 GitHub Action。
+* **GitHub Issues** - For bugs and feature requests
+* **Discussions** - For questions and general discussion
+* **[nix/docs](nix/docs/README.md)** - For detailed documentation
+* **Discord** - For real-time chat with the community
 
-## 本地校验
+---
 
-提交前至少运行：
+This is the same PostgreSQL build that powers [Supabase](https://supabase.io), battle-tested in production by over one million projects.
 
-```bash
-git diff --check
-actionlint .github/workflows/upstream-pg17-release-build.yml
-ruby -e 'require "yaml"; YAML.load_file(".github/workflows/upstream-pg17-release-build.yml"); puts "yaml ok"'
-```
 
-如果修改了项目技能，也运行：
+## Primary Features
+- ✅ Postgres [postgresql-15.14](https://www.postgresql.org/docs/15/index.html)
+- ✅ Postgres [postgresql-17.6](https://www.postgresql.org/docs/17/index.html)
+- ✅ Postgres [orioledb-postgresql-17_11](https://github.com/orioledb/orioledb)
+- ✅ Ubuntu 24.04 (Noble Numbat).
+- ✅ [wal_level](https://www.postgresql.org/docs/current/runtime-config-wal.html) = logical and [max_replication_slots](https://www.postgresql.org/docs/current/runtime-config-replication.html) = 5. Ready for replication.
+- ✅ [Large Systems Extensions](https://github.com/aws/aws-graviton-getting-started#building-for-graviton-and-graviton2). Enabled for ARM images.
+## Extensions
 
-```bash
-python3 /Users/xiongyanlin/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
-  .codex/skills/postgres-custom-extension-build
-```
+### PostgreSQL 15 Extensions
+| Extension | Version | Description |
+| ------------- | :-------------: | ------------- |
+| [http]() | [1.6]() |  |
+| [hypopg]() | [1.4.1]() |  |
+| [index_advisor]() | [0.2.0]() |  |
+| [pg-safeupdate](https://github.com/eradman/pg-safeupdate/archive/1.4.tar.gz) | [1.4](https://github.com/eradman/pg-safeupdate/archive/1.4.tar.gz) | A simple extension to PostgreSQL that requires criteria for UPDATE and DELETE |
+| [pg_cron]() | [1.6.4]() | Run Cron jobs through PostgreSQL (multi-version compatible) |
+| [pg_graphql](https://github.com/supabase/pg_graphql/archive/v1.5.11.tar.gz) | [1.5.11](https://github.com/supabase/pg_graphql/archive/v1.5.11.tar.gz) | GraphQL support for PostreSQL |
+| [pg_hashids](https://github.com/iCyberon/pg_hashids/archive/cd0e1b31d52b394a0df64079406a14a4f7387cd6.tar.gz) | [cd0e1b31d52b394a0df64079406a14a4f7387cd6](https://github.com/iCyberon/pg_hashids/archive/cd0e1b31d52b394a0df64079406a14a4f7387cd6.tar.gz) | Generate short unique IDs in PostgreSQL |
+| [pg_jsonschema](https://github.com/supabase/pg_jsonschema/archive/v0.3.3.tar.gz) | [0.3.3](https://github.com/supabase/pg_jsonschema/archive/v0.3.3.tar.gz) | JSON Schema Validation for PostgreSQL |
+| [pg_net]() | [0.8.0]() |  |
+| [pg_plan_filter](https://github.com/pgexperts/pg_plan_filter/archive/5081a7b5cb890876e67d8e7486b6a64c38c9a492.tar.gz) | [5081a7b5cb890876e67d8e7486b6a64c38c9a492](https://github.com/pgexperts/pg_plan_filter/archive/5081a7b5cb890876e67d8e7486b6a64c38c9a492.tar.gz) | Filter PostgreSQL statements by execution plans |
+| [pg_repack](https://github.com/reorg/pg_repack/archive/ver_1.5.2.tar.gz) | [1.5.2](https://github.com/reorg/pg_repack/archive/ver_1.5.2.tar.gz) | Reorganize tables in PostgreSQL databases with minimal locks |
+| [pg_stat_monitor](https://github.com/percona/pg_stat_monitor/archive/refs/tags/2.1.0.tar.gz) | [2.1.0](https://github.com/percona/pg_stat_monitor/archive/refs/tags/2.1.0.tar.gz) | Query Performance Monitoring Tool for PostgreSQL |
+| [pg_tle](https://github.com/aws/pg_tle/archive/refs/tags/v1.4.0.tar.gz) | [1.4.0](https://github.com/aws/pg_tle/archive/refs/tags/v1.4.0.tar.gz) | Framework for 'Trusted Language Extensions' in PostgreSQL |
+| [pgaudit](https://github.com/pgaudit/pgaudit/archive/1.7.0.tar.gz) | [1.7.0](https://github.com/pgaudit/pgaudit/archive/1.7.0.tar.gz) | Open Source PostgreSQL Audit Logging |
+| [pgjwt](https://github.com/michelp/pgjwt/archive/9742dab1b2f297ad3811120db7b21451bca2d3c9.tar.gz) | [9742dab1b2f297ad3811120db7b21451bca2d3c9](https://github.com/michelp/pgjwt/archive/9742dab1b2f297ad3811120db7b21451bca2d3c9.tar.gz) | PostgreSQL implementation of JSON Web Tokens |
+| [pgmq](https://github.com/tembo-io/pgmq/archive/v1.4.4.tar.gz) | [1.4.4](https://github.com/tembo-io/pgmq/archive/v1.4.4.tar.gz) | A lightweight message queue. Like AWS SQS and RSMQ but on Postgres. |
+| [pgroonga](https://packages.groonga.org/source/pgroonga/pgroonga-3.2.5.tar.gz) | [3.2.5](https://packages.groonga.org/source/pgroonga/pgroonga-3.2.5.tar.gz) | A PostgreSQL extension to use Groonga as the index |
+| [pgrouting](https://github.com/pgRouting/pgrouting/archive/v3.4.1.tar.gz) | [3.4.1](https://github.com/pgRouting/pgrouting/archive/v3.4.1.tar.gz) | A PostgreSQL/PostGIS extension that provides geospatial routing functionality |
+| [pgsodium]() | [3.1.8]() |  |
+| [pgtap](https://github.com/theory/pgtap/archive/v1.2.0.tar.gz) | [1.2.0](https://github.com/theory/pgtap/archive/v1.2.0.tar.gz) | A unit testing framework for PostgreSQL |
+| [plpgsql-check](https://github.com/okbob/plpgsql_check/archive/v2.7.11.tar.gz) | [2.7.11](https://github.com/okbob/plpgsql_check/archive/v2.7.11.tar.gz) | Linter tool for language PL/pgSQL |
+| [plv8](https://github.com/plv8/plv8/archive/v3.1.10.tar.gz) | [3.1.10](https://github.com/plv8/plv8/archive/v3.1.10.tar.gz) | V8 Engine Javascript Procedural Language add-on for PostgreSQL |
+| [postgis](https://download.osgeo.org/postgis/source/postgis-3.3.7.tar.gz) | [3.3.7](https://download.osgeo.org/postgis/source/postgis-3.3.7.tar.gz) | Geographic Objects for PostgreSQL |
+| [rum]() | [1.3]() |  |
+| [supautils](https://github.com/supabase/supautils/archive/refs/tags/v2.9.4.tar.gz) | [2.9.4](https://github.com/supabase/supautils/archive/refs/tags/v2.9.4.tar.gz) | PostgreSQL extension for enhanced security |
+| [timescaledb]() | [2.9.1]() |  |
+| [vault](https://github.com/supabase/vault/archive/refs/tags/v0.3.1.tar.gz) | [0.3.1](https://github.com/supabase/vault/archive/refs/tags/v0.3.1.tar.gz) | Store encrypted secrets in PostgreSQL |
+| [vector]() | [0.8.0]() |  |
+| [wal2json](https://github.com/eulerto/wal2json/archive/wal2json_2_6.tar.gz) | [2_6](https://github.com/eulerto/wal2json/archive/wal2json_2_6.tar.gz) | PostgreSQL JSON output plugin for changeset extraction |
+| [wrappers]() | [0.5.4]() |  |
 
-## Release 规则
+### PostgreSQL 17 Extensions
+| Extension | Version | Description |
+| ------------- | :-------------: | ------------- |
+| [http]() | [1.6]() |  |
+| [hypopg]() | [1.4.1]() |  |
+| [index_advisor]() | [0.2.0]() |  |
+| [pg-safeupdate](https://github.com/eradman/pg-safeupdate/archive/1.4.tar.gz) | [1.4](https://github.com/eradman/pg-safeupdate/archive/1.4.tar.gz) | A simple extension to PostgreSQL that requires criteria for UPDATE and DELETE |
+| [pg_cron]() | [1.6.4]() | Run Cron jobs through PostgreSQL (multi-version compatible) |
+| [pg_graphql](https://github.com/supabase/pg_graphql/archive/v1.5.11.tar.gz) | [1.5.11](https://github.com/supabase/pg_graphql/archive/v1.5.11.tar.gz) | GraphQL support for PostreSQL |
+| [pg_hashids](https://github.com/iCyberon/pg_hashids/archive/cd0e1b31d52b394a0df64079406a14a4f7387cd6.tar.gz) | [cd0e1b31d52b394a0df64079406a14a4f7387cd6](https://github.com/iCyberon/pg_hashids/archive/cd0e1b31d52b394a0df64079406a14a4f7387cd6.tar.gz) | Generate short unique IDs in PostgreSQL |
+| [pg_jsonschema](https://github.com/supabase/pg_jsonschema/archive/v0.3.3.tar.gz) | [0.3.3](https://github.com/supabase/pg_jsonschema/archive/v0.3.3.tar.gz) | JSON Schema Validation for PostgreSQL |
+| [pg_net]() | [0.19.5]() |  |
+| [pg_plan_filter](https://github.com/pgexperts/pg_plan_filter/archive/5081a7b5cb890876e67d8e7486b6a64c38c9a492.tar.gz) | [5081a7b5cb890876e67d8e7486b6a64c38c9a492](https://github.com/pgexperts/pg_plan_filter/archive/5081a7b5cb890876e67d8e7486b6a64c38c9a492.tar.gz) | Filter PostgreSQL statements by execution plans |
+| [pg_repack](https://github.com/reorg/pg_repack/archive/ver_1.5.2.tar.gz) | [1.5.2](https://github.com/reorg/pg_repack/archive/ver_1.5.2.tar.gz) | Reorganize tables in PostgreSQL databases with minimal locks |
+| [pg_stat_monitor](https://github.com/percona/pg_stat_monitor/archive/refs/tags/2.1.0.tar.gz) | [2.1.0](https://github.com/percona/pg_stat_monitor/archive/refs/tags/2.1.0.tar.gz) | Query Performance Monitoring Tool for PostgreSQL |
+| [pg_tle](https://github.com/aws/pg_tle/archive/refs/tags/v1.4.0.tar.gz) | [1.4.0](https://github.com/aws/pg_tle/archive/refs/tags/v1.4.0.tar.gz) | Framework for 'Trusted Language Extensions' in PostgreSQL |
+| [pgaudit](https://github.com/pgaudit/pgaudit/archive/17.0.tar.gz) | [17.0](https://github.com/pgaudit/pgaudit/archive/17.0.tar.gz) | Open Source PostgreSQL Audit Logging |
+| [pgjwt](https://github.com/michelp/pgjwt/archive/9742dab1b2f297ad3811120db7b21451bca2d3c9.tar.gz) | [9742dab1b2f297ad3811120db7b21451bca2d3c9](https://github.com/michelp/pgjwt/archive/9742dab1b2f297ad3811120db7b21451bca2d3c9.tar.gz) | PostgreSQL implementation of JSON Web Tokens |
+| [pgmq](https://github.com/tembo-io/pgmq/archive/v1.4.4.tar.gz) | [1.4.4](https://github.com/tembo-io/pgmq/archive/v1.4.4.tar.gz) | A lightweight message queue. Like AWS SQS and RSMQ but on Postgres. |
+| [pgroonga](https://packages.groonga.org/source/pgroonga/pgroonga-3.2.5.tar.gz) | [3.2.5](https://packages.groonga.org/source/pgroonga/pgroonga-3.2.5.tar.gz) | A PostgreSQL extension to use Groonga as the index |
+| [pgrouting](https://github.com/pgRouting/pgrouting/archive/v3.4.1.tar.gz) | [3.4.1](https://github.com/pgRouting/pgrouting/archive/v3.4.1.tar.gz) | A PostgreSQL/PostGIS extension that provides geospatial routing functionality |
+| [pgsodium]() | [3.1.8]() |  |
+| [pgtap](https://github.com/theory/pgtap/archive/v1.2.0.tar.gz) | [1.2.0](https://github.com/theory/pgtap/archive/v1.2.0.tar.gz) | A unit testing framework for PostgreSQL |
+| [plpgsql-check](https://github.com/okbob/plpgsql_check/archive/v2.7.11.tar.gz) | [2.7.11](https://github.com/okbob/plpgsql_check/archive/v2.7.11.tar.gz) | Linter tool for language PL/pgSQL |
+| [postgis](https://download.osgeo.org/postgis/source/postgis-3.3.7.tar.gz) | [3.3.7](https://download.osgeo.org/postgis/source/postgis-3.3.7.tar.gz) | Geographic Objects for PostgreSQL |
+| [rum]() | [1.3]() |  |
+| [supautils](https://github.com/supabase/supautils/archive/refs/tags/v2.9.4.tar.gz) | [2.9.4](https://github.com/supabase/supautils/archive/refs/tags/v2.9.4.tar.gz) | PostgreSQL extension for enhanced security |
+| [vault](https://github.com/supabase/vault/archive/refs/tags/v0.3.1.tar.gz) | [0.3.1](https://github.com/supabase/vault/archive/refs/tags/v0.3.1.tar.gz) | Store encrypted secrets in PostgreSQL |
+| [vector]() | [0.8.0]() |  |
+| [wal2json](https://github.com/eulerto/wal2json/archive/wal2json_2_6.tar.gz) | [2_6](https://github.com/eulerto/wal2json/archive/wal2json_2_6.tar.gz) | PostgreSQL JSON output plugin for changeset extraction |
+| [wrappers]() | [0.5.4]() |  |
 
-GitHub Release 的 tag 必须指向实际构建源码：
+### PostgreSQL orioledb-17 Extensions
+| Extension | Version | Description |
+| ------------- | :-------------: | ------------- |
+| [http]() | [1.6]() |  |
+| [hypopg]() | [1.4.1]() |  |
+| [index_advisor]() | [0.2.0]() |  |
+| [orioledb](https://github.com/orioledb/orioledb/archive/beta12.tar.gz) | [orioledb](https://github.com/orioledb/orioledb/archive/beta12.tar.gz) | orioledb |
+| [pg-safeupdate](https://github.com/eradman/pg-safeupdate/archive/1.4.tar.gz) | [1.4](https://github.com/eradman/pg-safeupdate/archive/1.4.tar.gz) | A simple extension to PostgreSQL that requires criteria for UPDATE and DELETE |
+| [pg_cron]() | [1.6.4]() | Run Cron jobs through PostgreSQL (multi-version compatible) |
+| [pg_graphql](https://github.com/supabase/pg_graphql/archive/v1.5.11.tar.gz) | [1.5.11](https://github.com/supabase/pg_graphql/archive/v1.5.11.tar.gz) | GraphQL support for PostreSQL |
+| [pg_hashids](https://github.com/iCyberon/pg_hashids/archive/cd0e1b31d52b394a0df64079406a14a4f7387cd6.tar.gz) | [cd0e1b31d52b394a0df64079406a14a4f7387cd6](https://github.com/iCyberon/pg_hashids/archive/cd0e1b31d52b394a0df64079406a14a4f7387cd6.tar.gz) | Generate short unique IDs in PostgreSQL |
+| [pg_jsonschema](https://github.com/supabase/pg_jsonschema/archive/v0.3.3.tar.gz) | [0.3.3](https://github.com/supabase/pg_jsonschema/archive/v0.3.3.tar.gz) | JSON Schema Validation for PostgreSQL |
+| [pg_net]() | [0.19.5]() |  |
+| [pg_plan_filter](https://github.com/pgexperts/pg_plan_filter/archive/5081a7b5cb890876e67d8e7486b6a64c38c9a492.tar.gz) | [5081a7b5cb890876e67d8e7486b6a64c38c9a492](https://github.com/pgexperts/pg_plan_filter/archive/5081a7b5cb890876e67d8e7486b6a64c38c9a492.tar.gz) | Filter PostgreSQL statements by execution plans |
+| [pg_repack](https://github.com/reorg/pg_repack/archive/ver_1.5.2.tar.gz) | [1.5.2](https://github.com/reorg/pg_repack/archive/ver_1.5.2.tar.gz) | Reorganize tables in PostgreSQL databases with minimal locks |
+| [pg_stat_monitor](https://github.com/percona/pg_stat_monitor/archive/refs/tags/2.1.0.tar.gz) | [2.1.0](https://github.com/percona/pg_stat_monitor/archive/refs/tags/2.1.0.tar.gz) | Query Performance Monitoring Tool for PostgreSQL |
+| [pg_tle](https://github.com/aws/pg_tle/archive/refs/tags/v1.4.0.tar.gz) | [1.4.0](https://github.com/aws/pg_tle/archive/refs/tags/v1.4.0.tar.gz) | Framework for 'Trusted Language Extensions' in PostgreSQL |
+| [pgaudit](https://github.com/pgaudit/pgaudit/archive/17.0.tar.gz) | [17.0](https://github.com/pgaudit/pgaudit/archive/17.0.tar.gz) | Open Source PostgreSQL Audit Logging |
+| [pgjwt](https://github.com/michelp/pgjwt/archive/9742dab1b2f297ad3811120db7b21451bca2d3c9.tar.gz) | [9742dab1b2f297ad3811120db7b21451bca2d3c9](https://github.com/michelp/pgjwt/archive/9742dab1b2f297ad3811120db7b21451bca2d3c9.tar.gz) | PostgreSQL implementation of JSON Web Tokens |
+| [pgmq](https://github.com/tembo-io/pgmq/archive/v1.4.4.tar.gz) | [1.4.4](https://github.com/tembo-io/pgmq/archive/v1.4.4.tar.gz) | A lightweight message queue. Like AWS SQS and RSMQ but on Postgres. |
+| [pgroonga](https://packages.groonga.org/source/pgroonga/pgroonga-3.2.5.tar.gz) | [3.2.5](https://packages.groonga.org/source/pgroonga/pgroonga-3.2.5.tar.gz) | A PostgreSQL extension to use Groonga as the index |
+| [pgrouting](https://github.com/pgRouting/pgrouting/archive/v3.4.1.tar.gz) | [3.4.1](https://github.com/pgRouting/pgrouting/archive/v3.4.1.tar.gz) | A PostgreSQL/PostGIS extension that provides geospatial routing functionality |
+| [pgsodium]() | [3.1.8]() |  |
+| [pgtap](https://github.com/theory/pgtap/archive/v1.2.0.tar.gz) | [1.2.0](https://github.com/theory/pgtap/archive/v1.2.0.tar.gz) | A unit testing framework for PostgreSQL |
+| [plpgsql-check](https://github.com/okbob/plpgsql_check/archive/v2.7.11.tar.gz) | [2.7.11](https://github.com/okbob/plpgsql_check/archive/v2.7.11.tar.gz) | Linter tool for language PL/pgSQL |
+| [postgis](https://download.osgeo.org/postgis/source/postgis-3.3.7.tar.gz) | [3.3.7](https://download.osgeo.org/postgis/source/postgis-3.3.7.tar.gz) | Geographic Objects for PostgreSQL |
+| [rum]() | [1.3]() |  |
+| [supautils](https://github.com/supabase/supautils/archive/refs/tags/v2.9.4.tar.gz) | [2.9.4](https://github.com/supabase/supautils/archive/refs/tags/v2.9.4.tar.gz) | PostgreSQL extension for enhanced security |
+| [vault](https://github.com/supabase/vault/archive/refs/tags/v0.3.1.tar.gz) | [0.3.1](https://github.com/supabase/vault/archive/refs/tags/v0.3.1.tar.gz) | Store encrypted secrets in PostgreSQL |
+| [vector]() | [0.8.0]() |  |
+| [wal2json](https://github.com/eulerto/wal2json/archive/wal2json_2_6.tar.gz) | [2_6](https://github.com/eulerto/wal2json/archive/wal2json_2_6.tar.gz) | PostgreSQL JSON output plugin for changeset extraction |
+| [wrappers]() | [0.5.4]() |  |
+## Additional Goodies
+*This is only available for our AWS EC2*
 
-```text
-upstream release source + custom extension patch
-```
+| Goodie | Version | Description |
+| ------------- | :-------------: | ------------- |
+| [PgBouncer](https://www.pgbouncer.org/) | [1.19.0](http://www.pgbouncer.org/changelog.html#pgbouncer-119x) | Set up Connection Pooling. |
+| [PostgREST](https://postgrest.org/en/stable/) | [v14.17](https://github.com/PostgREST/postgrest/releases/tag/v14.17) | Instantly transform your database into an RESTful API. |
+| [WAL-G](https://github.com/wal-g/wal-g#wal-g) | [v2.0.1](https://github.com/wal-g/wal-g/releases/tag/v2.0.1) | Tool for physical database backup and recovery. | -->
 
-不要把 release tag 指向 workflow 分支 commit。
 
-当前 tag 命名示例：
+## Install
 
-```text
-postgres-17.6.1.141
-postgres-17.6.0.098-orioledb
-```
+See the [documentation index](nix/docs/README.md) for installation instructions.
 
-Release 描述中会包含：
+[![Docker](https://github.com/supabase/postgres/blob/develop/docs/img/docker.png)](nix/docs/docker.md)
 
-- upstream release
-- upstream commit
-- patched source commit
-- Docker Hub image URL
-- `docker pull` 命令
+<!-- ### Marketplace Images
+TODO: find way to automate this
+|   | Postgres & Extensions | PgBouncer | PostgREST | WAL-G |
+|---|:---:|:---:|:---:|:---:|
+| Supabase Postgres |  ✔️   | ❌    | ❌   |  ✔️   |
+| Supabase Postgres: PgBouncer Bundle  |  ✔️   |  ✔️  | ❌    |   ✔️ |
+| Supabase Postgres: PostgREST Bundle |  ✔️   |  ❌  |  ✔️   |   ✔️ |
+| Supabase Postgres: Complete Bundle |  ✔️  |  ✔️   | ✔️   | ✔️   |
 
-## 注意事项
+#### Availability
+|   | AWS ARM | AWS x86 | Digital Ocean x86 |
+|---|:---:|:---:|:---:|
+| Supabase Postgres | Coming Soon | Coming Soon | Coming Soon |
+| Supabase Postgres: PgBouncer Bundle  | Coming Soon | Coming Soon | Coming Soon |
+| Supabase Postgres: PostgREST Bundle | Coming Soon | Coming Soon | Coming Soon |
+| Supabase Postgres: Complete Bundle | Coming Soon | Coming Soon | Coming Soon |
 
-- 不要随意扩大 workflow 中的 `patch_paths`。
-- 不要覆盖 `shared_preload_libraries`，只追加需要的库。
-- 没有稳定 release 的扩展，不要直接 pin 随机 commit，先确认策略。
-- 不要把扩展名加入最终 Docker image version tag，除非明确需要。
-- 不要强推或删除 release tag，除非明确确认。
+``` -->
+
+## Motivation
+
+- Make it fast and simple to get started with Postgres.
+- Show off a few of Postgres' most exciting features.
+- This is the same build we offer at [Supabase](https://supabase.io).
+- Open a github issue if you have a feature request
+
+## License
+
+[The PostgreSQL License](https://opensource.org/licenses/postgresql). We realize that licensing is tricky since we are bundling all the various plugins. If we have infringed on any license, let us know and we will make the necessary changes (or remove that extension from this repo).
+
+## Sponsors
+
+We are building the features of Firebase using enterprise-grade, open source products. We support existing communities wherever possible, and if the products don’t exist we build them and open source them ourselves.
+
+[![New Sponsor](https://user-images.githubusercontent.com/10214025/90518111-e74bbb00-e198-11ea-8f88-c9e3c1aa4b5b.png)](https://github.com/sponsors/supabase)
