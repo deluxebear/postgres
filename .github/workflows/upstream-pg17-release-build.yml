@@ -11,6 +11,11 @@ on:
         required: false
         default: true
         type: boolean
+      upstream_ref:
+        description: "Optional exact Supabase PG17 release tag to rebuild (for example 17.6.1.166)"
+        required: false
+        default: ""
+        type: string
   schedule:
     - cron: "20 2 * * *"
 
@@ -30,6 +35,7 @@ jobs:
         id: releases
         env:
           GH_TOKEN: ${{ github.token }}
+          REQUESTED_UPSTREAM_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.upstream_ref || '' }}
         run: |
           set -euo pipefail
 
@@ -38,44 +44,59 @@ jobs:
             -H "Authorization: Bearer ${GH_TOKEN}" \
             "https://api.github.com/repos/supabase/postgres/releases?per_page=100")"
 
-          selected_matrix="$(jq -c '
+          selected_matrix="$(jq -c --arg requested_ref "$REQUESTED_UPSTREAM_REF" '
             def release_text: ((.tag_name // "") + " " + (.name // ""));
             def stable: (.draft | not) and (.prerelease | not);
             def no_test: (release_text | test("test"; "i") | not);
             def server_pg17: (.tag_name | test("^v?17[.][0-9]+[.][0-9]+[.][0-9]+$"));
             def server_orioledb17: (.tag_name | test("^v?17[.][0-9]+[.][0-9]+[.][0-9]+-orioledb$"));
+            def matrix_item:
+              if . == null then empty
+              elif server_pg17 then {
+                flavor: "17",
+                upstream_ref: .tag_name,
+                release_name: .name,
+                package_attr: ".#psql_17/bin",
+                dockerfile: "Dockerfile-17",
+                docker_target: ""
+              }
+              elif server_orioledb17 then {
+                flavor: "orioledb-17",
+                upstream_ref: .tag_name,
+                release_name: .name,
+                package_attr: ".#psql_orioledb-17/bin",
+                dockerfile: "Dockerfile-orioledb-17",
+                docker_target: ""
+              }
+              else empty
+              end;
 
-            {
-              include: [
-                ([
+            if $requested_ref != "" then
+              {
+                include: [
                   .[]
-                  | select(stable and no_test and server_pg17)
-                ][0] | {
-                  flavor: "17",
-                  upstream_ref: .tag_name,
-                  release_name: .name,
-                  package_attr: ".#psql_17/bin",
-                  dockerfile: "Dockerfile-17",
-                  docker_target: ""
-                }),
-                ([
-                  .[]
-                  | select(stable and no_test and server_orioledb17)
-                ][0] | {
-                  flavor: "orioledb-17",
-                  upstream_ref: .tag_name,
-                  release_name: .name,
-                  package_attr: ".#psql_orioledb-17/bin",
-                  dockerfile: "Dockerfile-orioledb-17",
-                  docker_target: ""
-                })
-              ]
-              | map(select(.upstream_ref != null))
-            }
+                  | select(.tag_name == $requested_ref)
+                  | select(stable and no_test)
+                  | matrix_item
+                ]
+              }
+            else
+              {
+                include: [
+                  ([.[] | select(stable and no_test and server_pg17)][0] | matrix_item),
+                  ([.[] | select(stable and no_test and server_orioledb17)][0] | matrix_item)
+                ]
+                | map(select(.upstream_ref != null))
+              }
+            end
           ' <<< "$releases_json")"
 
           if [ "$(jq '.include | length' <<< "$selected_matrix")" -eq 0 ]; then
-            echo "No matching upstream PG17 releases found" >&2
+            if [ -n "$REQUESTED_UPSTREAM_REF" ]; then
+              echo "Requested stable upstream PG17 release not found: $REQUESTED_UPSTREAM_REF" >&2
+            else
+              echo "No matching upstream PG17 releases found" >&2
+            fi
             exit 1
           fi
 
