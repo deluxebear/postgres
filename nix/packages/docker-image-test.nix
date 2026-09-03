@@ -52,6 +52,37 @@ writeShellApplication {
     log_warn() { echo -e "''${YELLOW}[WARN]''${NC} $1"; }
     log_error() { echo -e "''${RED}[ERROR]''${NC} $1"; }
 
+    wait_for_container_health() {
+        local container="$1"
+        local timeout_seconds=90
+        local elapsed=0
+        local health=""
+
+        while [[ $elapsed -lt $timeout_seconds ]]; do
+            health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")
+            case "$health" in
+                healthy)
+                    log_info "Container health check passed after ''${elapsed}s"
+                    return 0
+                    ;;
+                unhealthy)
+                    log_error "Container became unhealthy during startup"
+                    docker inspect --format '{{range .State.Health.Log}}{{println .ExitCode .Output}}{{end}}' "$container"
+                    return 1
+                    ;;
+                none)
+                    log_error "Container image does not define a health check"
+                    return 1
+                    ;;
+            esac
+            sleep 2
+            elapsed=$((elapsed + 2))
+        done
+
+        log_error "Container did not become healthy within ''${timeout_seconds}s"
+        return 1
+    }
+
     print_help() {
         cat << 'EOF'
     Usage: nix run .#docker-image-test -- [OPTIONS] DOCKERFILE
@@ -638,6 +669,11 @@ writeShellApplication {
             "$IMAGE_TAG"
 
         if [[ "$VERSION" == "17" || "$VERSION" == "orioledb-17" ]]; then
+            if ! wait_for_container_health "$CONTAINER_NAME"; then
+                log_error "Container logs:"
+                docker logs "$CONTAINER_NAME"
+                exit 1
+            fi
             verify_pgbackrest_integration "$CONTAINER_NAME"
         fi
 

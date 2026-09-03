@@ -228,6 +228,32 @@ gh run view <run-id> --repo deluxebear/postgres --json status,conclusion,jobs,ur
 docker build -f Dockerfile-17 -t postgres:17-custom .
 ```
 
+首次启动空数据目录时必须提供非空的 `POSTGRES_PASSWORD`。下面的参数可直接用于本地运行：
+
+```bash
+export POSTGRES_PASSWORD='replace-with-a-strong-password'
+
+docker run -d \
+  --name postgres-17-custom \
+  -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+  -p 5432:5432 \
+  -v postgres-17-custom-data:/var/lib/postgresql/data \
+  postgres:17-custom
+```
+
+首次初始化会执行 `/docker-entrypoint-initdb.d/` 中的迁移，通常需要 30–60 秒。查看启动进度和健康状态：
+
+```bash
+docker logs -f postgres-17-custom
+docker inspect --format '{{.State.Health.Status}}' postgres-17-custom
+```
+
+日志出现 `database system is ready to accept connections` 且健康状态为 `healthy` 后即可连接：
+
+```bash
+docker exec -it postgres-17-custom psql -U supabase_admin -d postgres
+```
+
 本地构建 OrioleDB17：
 
 ```bash

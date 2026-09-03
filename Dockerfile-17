@@ -29,7 +29,13 @@ extra-trusted-public-keys = nix-postgres-artifacts:dGZlQOvKcNEjvT7QEAJbcV6b6uk7V
 filter-syscalls = false
 EOF
 ENV NIX_CONFIG="filter-syscalls = false"
-RUN curl -L https://releases.nixos.org/nix/nix-2.34.6/install | sh -s -- --daemon --no-channel-add --yes --nix-extra-conf-file /tmp/extra-nix.conf
+RUN curl --fail --show-error --silent --location \
+        --retry 5 --retry-delay 2 --retry-all-errors \
+        --output /tmp/nix-install \
+        https://releases.nixos.org/nix/nix-2.34.6/install && \
+    sh /tmp/nix-install --daemon --no-channel-add --yes \
+        --nix-extra-conf-file /tmp/extra-nix.conf && \
+    rm /tmp/nix-install
 ENV PATH="${PATH}:/nix/var/nix/profiles/default/bin"
 RUN nix --version
 
@@ -250,7 +256,8 @@ ENV NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV LOCALE_ARCHIVE=/nix/var/nix/profiles/default/lib/locale/locale-archive
 
 ENTRYPOINT ["docker-entrypoint.sh"]
-HEALTHCHECK --interval=2s --timeout=2s --retries=10 CMD pg_isready -U postgres -h localhost
+HEALTHCHECK --interval=5s --timeout=3s --start-period=60s --retries=10 \
+    CMD pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" -h localhost
 STOPSIGNAL SIGINT
 EXPOSE 5432
 
