@@ -14,9 +14,9 @@
 - `pg_durable 0.2.7` 是官方 GitHub 于 2026-09-01 发布的最新稳定版本，release 见 [v0.2.7](https://github.com/microsoft/pg_durable/releases/tag/v0.2.7)。上游源码继续使用 pgrx `0.16.1`，保留 `pg17` 构建特性，并提供 `pg_durable--0.2.6--0.2.7.sql` 升级路径。
 - `pg_durable 0.2.7` 新增 `pg_durable.host` 配置，限制模式下的 HTTP 请求现在强制使用 HTTPS，并统一使用规范化 URL 完成校验和传输以修复 allow-list 绕过；工作连接也会原样保留需要引用的数据库角色名。
 - 从 `0.2.5` 或更早版本升级时，应检查是否存在依赖未公开函数 `df.ensure_durofut(text)` 的自定义对象；该函数已在 `0.2.6` 移除。应用不应持久化内部 `Durofut` JSON envelope 后跨版本回放。
-- `pg_duckdb 1.1.1` 仍是官方 GitHub 最新稳定版本，因此本次不改变其 pin 或接入范围。
+- `pg_duckdb 1.1.1` 仍是官方 GitHub 最新稳定源码版本，因此本次不改变其 pin 或接入范围。该上游 release 的 `pg_duckdb.control` 仍声明 SQL 扩展版本 `1.1.0`，且没有提供 `1.1.0--1.1.1.sql`；因此镜像中的 Nix 包路径是 `pg_duckdb-1.1.1`，PostgreSQL `extversion` 仍会显示 `1.1.0`，这是上游版本设计而非旧源码残留。
 - `pg_durable` 的 Cargo 依赖通过 crates.io 官方静态下载地址获取，避开 API 下载端点的 HTTP 403；仍使用上游 `Cargo.lock` 中的固定版本和 SHA-256 校验和。
-- 2026-08-27 已对 `pg_durable 0.2.6` 完成 [GitHub Actions 四目标 Nix 构建验证](https://github.com/deluxebear/postgres/actions/runs/33070095109)：标准 PG17（`17.6.1.166`）与 OrioleDB17（`17.9.0.019-orioledb`）的 amd64/arm64 全部成功，构建源码提交为 `1754369`。本轮使用 `build_docker=false`，未进行本地构建、镜像发布或 Release tag 更新；未运行数据库安装、升级及 dump/restore 回归测试。
+- 2026-09-03 已通过 [GitHub Actions 定向重建](https://github.com/deluxebear/postgres/actions/runs/33715610063) 完成 Supabase PG17 `17.6.1.166` 的 amd64/arm64 Nix 构建、Docker 推送、多架构 manifest 及 [GitHub Release](https://github.com/deluxebear/postgres/releases/tag/postgres-17.6.1.166) 更新。镜像 `deluxebear/postgres:17.6.1.166` 的 manifest digest 为 `sha256:50ed9572145a34c4ffa238993832a34ae7da15bc5ae0c37bc2c715b0b336eb58`；直接检查 ARM64 镜像确认 `pg_durable.control` 为 `0.2.7`、升级脚本 `pg_durable--0.2.6--0.2.7.sql` 存在，且 `pg_duckdb` 来自 Nix 包 `pg_duckdb-1.1.1`。本轮未运行数据库安装、升级及 dump/restore 回归测试。
 
 ## 使用项目技能
 
