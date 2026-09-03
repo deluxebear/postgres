@@ -12,7 +12,7 @@
 
 let
   pname = "pg_durable";
-  version = "0.2.6";
+  version = "0.2.7";
   rustVersion = "1.88.0";
   pgrxVersion = "0.16.1";
   pgMajor = if postgresql.isOrioleDB or false then "17" else lib.versions.major postgresql.version;
@@ -27,7 +27,7 @@ let
 
     src = fetchurl {
       url = "https://github.com/microsoft/pg_durable/releases/download/v${version}/pg_durable-${version}.tar.gz";
-      hash = "sha256-VLfdddc2GES+wBzhZF2hOwo8WD4+Jag4JJslwa6sjmA=";
+      hash = "sha256-tC1zNtHshviijGFjZYn3Nx6b6tR1NYmM7m0TyjnWwZA=";
     };
 
     nativeBuildInputs = [ cargo ];
@@ -56,7 +56,7 @@ let
     }) {
       lockFile = fetchurl {
         url = "https://raw.githubusercontent.com/microsoft/pg_durable/v${version}/Cargo.lock";
-        hash = "sha256-p5lpbmzGIEEKqvUxSOSmP8hxD7B93/YC1yVCPVHPZEw=";
+        hash = "sha256-xRJ4XiRuYGY18jYV1dUSxYsUmryss1y2B5Xbe62NDR8=";
       };
     };
 
