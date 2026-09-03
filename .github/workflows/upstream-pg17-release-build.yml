@@ -307,17 +307,24 @@ jobs:
           version_tag="${release_tag}"
           floating_tag="${{ matrix.release.flavor }}"
           arch_tag="${{ matrix.arch }}"
+          targeted_rebuild="${{ github.event_name == 'workflow_dispatch' && inputs.upstream_ref != '' }}"
+
+          image_tags=(-t "${image_repo}:${version_tag}-${arch_tag}")
+          if [ "$targeted_rebuild" != "true" ]; then
+            image_tags+=(-t "${image_repo}:${floating_tag}-${arch_tag}")
+          fi
 
           echo "Pushing Docker image:"
           echo "  ${image_repo}:${version_tag}-${arch_tag}"
-          echo "  ${image_repo}:${floating_tag}-${arch_tag}"
+          if [ "$targeted_rebuild" != "true" ]; then
+            echo "  ${image_repo}:${floating_tag}-${arch_tag}"
+          fi
 
           docker buildx build \
             --platform "linux/${arch_tag}" \
             -f "${{ matrix.release.dockerfile }}" \
             "${target_arg[@]}" \
-            -t "${image_repo}:${version_tag}-${arch_tag}" \
-            -t "${image_repo}:${floating_tag}-${arch_tag}" \
+            "${image_tags[@]}" \
             --cache-from "type=gha,scope=postgres-${{ matrix.release.flavor }}-${arch_tag}" \
             --cache-to "type=gha,mode=max,scope=postgres-${{ matrix.release.flavor }}-${arch_tag}" \
             --push \
@@ -356,14 +363,21 @@ jobs:
           release_tag="${release_tag#v}"
           version_tag="${release_tag}"
           floating_tag="${{ matrix.release.flavor }}"
+          targeted_rebuild="${{ github.event_name == 'workflow_dispatch' && inputs.upstream_ref != '' }}"
+
+          manifest_tags=(-t "${image_repo}:${version_tag}")
+          if [ "$targeted_rebuild" != "true" ]; then
+            manifest_tags+=(-t "${image_repo}:${floating_tag}")
+          fi
 
           echo "Publishing Docker manifests:"
           echo "  ${image_repo}:${version_tag}"
-          echo "  ${image_repo}:${floating_tag}"
+          if [ "$targeted_rebuild" != "true" ]; then
+            echo "  ${image_repo}:${floating_tag}"
+          fi
 
           docker buildx imagetools create \
-            -t "${image_repo}:${version_tag}" \
-            -t "${image_repo}:${floating_tag}" \
+            "${manifest_tags[@]}" \
             "${image_repo}:${version_tag}-amd64" \
             "${image_repo}:${version_tag}-arm64"
 
@@ -493,6 +507,7 @@ jobs:
           image_repo="${DOCKERHUB_REPOSITORY:-${DOCKER_USERNAME}/postgres}"
           version_tag="${{ steps.source.outputs.version_tag }}"
           floating_tag="${{ matrix.release.flavor }}"
+          targeted_rebuild="${{ github.event_name == 'workflow_dispatch' && inputs.upstream_ref != '' }}"
 
           {
             echo "PostgreSQL build based on Supabase upstream release \`${{ matrix.release.upstream_ref }}\`."
@@ -510,8 +525,10 @@ jobs:
             echo
             echo "- Docker Hub image: https://hub.docker.com/r/${image_repo}/tags?name=${version_tag}"
             echo "- Version pull: \`docker pull ${image_repo}:${version_tag}\`"
-            echo "- Floating Docker Hub image: https://hub.docker.com/r/${image_repo}/tags?name=${floating_tag}"
-            echo "- Floating pull: \`docker pull ${image_repo}:${floating_tag}\`"
+            if [ "$targeted_rebuild" != "true" ]; then
+              echo "- Floating Docker Hub image: https://hub.docker.com/r/${image_repo}/tags?name=${floating_tag}"
+              echo "- Floating pull: \`docker pull ${image_repo}:${floating_tag}\`"
+            fi
             echo
             echo "## Architecture tags"
             echo
