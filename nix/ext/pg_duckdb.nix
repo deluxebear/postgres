@@ -16,21 +16,24 @@
 
 let
   pname = "pg_duckdb";
-  version = "1.1.1";
+  version = "1.2.0";
+  # Upstream has not tagged v1.2.0 yet. Pin the current main commit whose
+  # control file reports 1.2.0; the latest GitHub release remains v1.1.1.
+  rev = "ee38d3b540ecea1d93683ba99bdcec5632a21eaf";
 
   src = fetchurl {
-    url = "https://github.com/duckdb/pg_duckdb/archive/refs/tags/v${version}.tar.gz";
-    hash = "sha256-F2O9RgsxyfM7Ht8Lu8UN2P9bj6ClZtBTJG7Ouy2mrNk=";
+    url = "https://github.com/duckdb/pg_duckdb/archive/${rev}.tar.gz";
+    hash = "sha256-ZLE1HAVxXnMyVO8dO9YKeF3u/dsolvwLHEv0+bfxba0=";
   };
 
   duckdbSrc = fetchurl {
-    url = "https://github.com/duckdb/duckdb/archive/d1dc88f950d456d72493df452dabdcd13aa413dd.tar.gz";
-    hash = "sha256-dRHh9QnOnBCpXArli8RVHUsBWx3FZk9FN7L24SDEyR8=";
+    url = "https://github.com/duckdb/duckdb/archive/08e34c447bae34eaee3723cac61f2878b6bdf787.tar.gz";
+    hash = "sha256-Det4u1PdUDAyNQOy8/9dUtZq95adzx84SaID18dp5IE=";
   };
 
   httpfsSrc = fetchurl {
-    url = "https://github.com/duckdb/duckdb-httpfs/archive/9c7d34977b10346d0b4cbbde5df807d1dab0b2bf.tar.gz";
-    hash = "sha256-2Ttof3k+Z038+deETI5yZRJucIQ4mXvuTuAcMvtBKAM=";
+    url = "https://github.com/duckdb/duckdb-httpfs/archive/c3f215ab360f04dc3d3d5305fa81849c0121f111.tar.gz";
+    hash = "sha256-69od5lyqLspPWJHaRiWDkp/VcXoqeCJ/bk3R/61wDfc=";
   };
 
   extension = stdenv.mkDerivation {
@@ -69,7 +72,7 @@ let
       duckdb_extension_load(icu)
       duckdb_extension_load(httpfs
           SOURCE_DIR ''${CMAKE_CURRENT_LIST_DIR}/duckdb-httpfs
-          EXTENSION_VERSION 9c7d34977b
+          EXTENSION_VERSION c3f215ab36
       )
       EOF
 
