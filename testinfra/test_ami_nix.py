@@ -316,7 +316,7 @@ write_files:
 runcmd:
     - 'sudo echo \"pgbouncer\" \"postgres\" >> /etc/pgbouncer/userlist.txt'
     - 'cd /tmp && aws s3 cp --region ap-southeast-1 s3://init-scripts-staging/project/init.sh .'
-    - 'bash init.sh "staging"'
+    - 'USE_LEGACY_INT_CA_SECRET=true bash init.sh "staging"'
     - 'touch /var/lib/init-complete'
     - 'rm -rf /tmp/*'
 users:
@@ -1072,6 +1072,180 @@ def test_postgrest_read_only_session_attrs(host):
             print("Warning: Failed to restore PostgreSQL configuration")
 
 
+def test_custom_overrides_take_precedence_over_generated_optimizations(host):
+    """Verify CLI-managed PostgreSQL config overrides generated optimizations.
+
+    postgresql.conf includes generated-optimizations.conf before
+    custom-overrides.conf (both flat under /etc/postgresql-custom/, includes
+    uncommented during the AMI build), so the custom override wins. include_dir
+    conf.d comes after both, so anything in conf.d beats them by include order
+    — a hosted incident happened when generated-optimizations.conf was placed
+    in conf.d and silently overrode CLI-managed config. This test guards both
+    sides of that contract: the flat-file precedence, and that the AMI ships
+    no conf.d copy of generated-optimizations.conf.
+    """
+    ssh = host["ssh"]
+    backup_dir = "/tmp/pg-config-precedence-test"
+    custom_conf = "/etc/postgresql-custom/custom-overrides.conf"
+    generated_conf = "/etc/postgresql-custom/generated-optimizations.conf"
+    confd_generated_conf = "/etc/postgresql-custom/conf.d/generated-optimizations.conf"
+    config_files = [custom_conf, generated_conf]
+
+    confd_check = run_ssh_command(ssh, f"sudo test -e {confd_generated_conf}")
+    assert not confd_check["succeeded"], (
+        f"{confd_generated_conf} exists on the AMI; conf.d is included after "
+        "custom-overrides.conf, so a generated-optimizations.conf there "
+        "overrides CLI-managed config"
+    )
+
+    def assert_command_succeeded(result, action):
+        assert result["succeeded"], (
+            f"{action} failed.\nstdout: {result['stdout']}\nstderr: {result['stderr']}"
+        )
+
+    def backup_name(path):
+        return path.strip("/").replace("/", "__")
+
+    def backup_config_files():
+        commands = [
+            "set -eu",
+            f"sudo rm -rf {backup_dir}",
+            f"sudo mkdir -p {backup_dir}",
+        ]
+        for path in config_files:
+            backup_path = f"{backup_dir}/{backup_name(path)}"
+            commands.extend(
+                [
+                    f"if sudo test -e {path}; then",
+                    f"    sudo cp -a {path} {backup_path}",
+                    "else",
+                    f"    sudo touch {backup_path}.missing",
+                    "fi",
+                ]
+            )
+
+        result = run_ssh_command(ssh, "\n".join(commands))
+        assert_command_succeeded(result, "Backup PostgreSQL config files")
+
+    def restore_config_files():
+        commands = ["set -eu"]
+        for path in config_files:
+            backup_path = f"{backup_dir}/{backup_name(path)}"
+            commands.extend(
+                [
+                    f"sudo mkdir -p $(dirname {path})",
+                    f"if sudo test -f {backup_path}.missing; then",
+                    f"    sudo rm -f {path}",
+                    "else",
+                    f"    sudo cp -a {backup_path} {path}",
+                    "fi",
+                ]
+            )
+        commands.append(f"sudo rm -rf {backup_dir}")
+        return run_ssh_command(ssh, "\n".join(commands))
+
+    def restart_postgresql(context):
+        result = run_ssh_command(ssh, "sudo systemctl restart postgresql")
+        assert_command_succeeded(result, context)
+        sleep(5)
+
+    def read_max_connections_source():
+        result = run_ssh_command(
+            ssh,
+            "sudo -u postgres psql -X -v ON_ERROR_STOP=1 -t -A -F '|' "
+            "-d postgres -c "
+            '"SELECT setting, sourcefile '
+            "FROM pg_settings WHERE name = 'max_connections';\"",
+        )
+        assert_command_succeeded(result, "Query max_connections setting")
+
+        rows = [line.strip() for line in result["stdout"].splitlines() if line.strip()]
+        assert len(rows) == 1, (
+            f"Expected one max_connections row, got {len(rows)}:\n{result['stdout']}"
+        )
+        return rows[0].split("|", 1)
+
+    backup_config_files()
+
+    try:
+        write_result = run_ssh_command(
+            ssh,
+            """
+            set -eu
+            CUSTOM_CONF=/etc/postgresql-custom/custom-overrides.conf
+            GENERATED_CONF=/etc/postgresql-custom/generated-optimizations.conf
+
+            printf '%s\n' 'max_connections = 111' |
+                sudo tee "$GENERATED_CONF" > /dev/null
+            printf '%s\n' 'max_connections = 112' |
+                sudo tee "$CUSTOM_CONF" > /dev/null
+            sudo chown postgres:postgres "$GENERATED_CONF" "$CUSTOM_CONF"
+            sudo chmod 0664 "$GENERATED_CONF" "$CUSTOM_CONF"
+            """,
+        )
+        assert_command_succeeded(
+            write_result,
+            "Write PostgreSQL precedence test config files",
+        )
+
+        restart_postgresql("Restart PostgreSQL with precedence test config")
+
+        setting, sourcefile = read_max_connections_source()
+
+        assert setting == "112", (
+            "Expected custom-overrides.conf to win over generated optimizations "
+            f"for max_connections, got setting={setting}, sourcefile={sourcefile}"
+        )
+        assert sourcefile == "/etc/postgresql-custom/custom-overrides.conf", (
+            "Expected max_connections to come from custom-overrides.conf, "
+            f"got sourcefile={sourcefile}"
+        )
+    finally:
+        restore_result = restore_config_files()
+        if not restore_result["succeeded"]:
+            print(
+                "Warning: Failed to restore PostgreSQL precedence test config files.\n"
+                f"stdout: {restore_result['stdout']}\nstderr: {restore_result['stderr']}"
+            )
+
+        try:
+            restart_postgresql("Restart PostgreSQL after precedence test restore")
+            print("Restored PostgreSQL config files after precedence test")
+        except AssertionError as error:
+            print(
+                "Warning: Failed to restart PostgreSQL after restoring "
+                f"precedence test config.\n{error}"
+            )
+
+
+def test_copy_fail_algif_aead_mitigation(host):
+    """Verify algif_aead is blocked from autoloading and is not loaded."""
+    result = run_ssh_command(
+        host["ssh"],
+        "grep -R '^install algif_aead /bin/false$' /etc/modprobe.d /usr/lib/modprobe.d",
+    )
+    assert result["succeeded"], (
+        "algif_aead module autoload is not disabled by modprobe config.\n"
+        f"stdout: {result['stdout']}\nstderr: {result['stderr']}"
+    )
+
+    result = run_ssh_command(
+        host["ssh"],
+        "grep -qE '^algif_aead ' /proc/modules",
+    )
+    assert not result["succeeded"], "algif_aead module is loaded"
+
+    result = run_ssh_command(
+        host["ssh"],
+        "sudo modprobe -n -v algif_aead 2>&1",
+    )
+    assert result["succeeded"], f"modprobe dry-run failed: {result['stderr']}"
+    assert "install /bin/false" in result["stdout"], (
+        "modprobe dry-run did not resolve algif_aead to /bin/false.\n"
+        f"stdout: {result['stdout']}"
+    )
+
+
 def test_apparmor_postgresql_service_uses_profile(host):
     """Verify the PostgreSQL systemd service is running under the sbpostgres AppArmor profile."""
     result = run_ssh_command(
@@ -1171,19 +1345,21 @@ def test_apparmor_allows_pg_dump(host):
     )
 
 
-def test_apparmor_allows_walg(host):
-    """Verify wal-g-2 can be executed under the sbpostgres AppArmor profile.
+@pytest.mark.parametrize("walg_binary", ["wal-g-2", "wal-g-3"])
+def test_apparmor_allows_walg(host, walg_binary):
+    """Verify wal-g-2 and wal-g-3 can be executed under the sbpostgres AppArmor profile.
 
-    /nix/store/*/bin/wal-g-2 is listed as 'ix' in postgres_shell. We locate the
-    binary at runtime since the Nix store hash is not known ahead of time.
+    /nix/store/*/bin/wal-g-2 and /nix/store/*/bin/wal-g-3 are listed as 'ix' in
+    postgres_shell. We locate the binary at runtime since the Nix store hash is
+    not known ahead of time.
     """
     find_result = run_ssh_command(
         host["ssh"],
-        "find /nix/store -maxdepth 3 -name 'wal-g-2' -type f 2>/dev/null | head -1",
+        f"find /nix/store -maxdepth 3 -name '{walg_binary}' -type f 2>/dev/null | head -1",
     )
     walg_path = find_result["stdout"].strip()
     if not walg_path:
-        print("wal-g-2 not found in Nix store, skipping")
+        print(f"{walg_binary} not found in Nix store, skipping")
         return
 
     result = run_ssh_command(
@@ -1192,7 +1368,7 @@ def test_apparmor_allows_walg(host):
         f"\"COPY (SELECT 1) TO PROGRAM '{walg_path} --version';\"",
     )
     assert result["succeeded"], (
-        f"wal-g-2 was blocked by AppArmor.\n"
+        f"{walg_binary} was blocked by AppArmor.\n"
         f"stdout: {result['stdout']}\nstderr: {result['stderr']}"
     )
 
