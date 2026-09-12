@@ -6,13 +6,14 @@
 
 | 扩展 | 当前版本 | 上游地址 | 接入范围 | 是否预加载 | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| `pg_durable` | `0.2.7` | `https://github.com/microsoft/pg_durable` | `psql_17`、`psql_17_slim`、`psql_orioledb-17`、`psql_orioledb-17_slim` | 是，追加 `pg_durable` | Durable SQL Functions for PostgreSQL。上游明确支持 PG17/PG18；本仓库将其作为标准 PG17 和 OrioleDB17 共享扩展构建。 |
+| `pg_durable` | `0.2.8` | `https://github.com/microsoft/pg_durable` | `psql_17`、`psql_17_slim`、`psql_orioledb-17`、`psql_orioledb-17_slim` | 是，追加 `pg_durable` | Durable SQL Functions for PostgreSQL。上游明确支持 PG17/PG18；本仓库将其作为标准 PG17 和 OrioleDB17 共享扩展构建。 |
 | `pg_duckdb` | `1.1.1` | `https://github.com/duckdb/pg_duckdb` | `psql_17`、`psql_17_slim` | 是，追加 `pg_duckdb` | DuckDB Embedded in Postgres。当前只接入标准 PG17；暂不接入 OrioleDB17，因为 OrioleDB 的 `TableAmRoutine` ABI 与标准 PostgreSQL 17 不兼容。 |
 
 ### 当前版本说明
 
-- `pg_durable 0.2.7` 是官方 GitHub 于 2026-09-01 发布的最新稳定版本，release 见 [v0.2.7](https://github.com/microsoft/pg_durable/releases/tag/v0.2.7)。上游源码继续使用 pgrx `0.16.1`，保留 `pg17` 构建特性，并提供 `pg_durable--0.2.6--0.2.7.sql` 升级路径。
-- `pg_durable 0.2.7` 新增 `pg_durable.host` 配置，限制模式下的 HTTP 请求现在强制使用 HTTPS，并统一使用规范化 URL 完成校验和传输以修复 allow-list 绕过；工作连接也会原样保留需要引用的数据库角色名。
+- `pg_durable 0.2.8` 是官方 GitHub 于 2026-09-11 发布的最新稳定版本，release 见 [v0.2.8](https://github.com/microsoft/pg_durable/releases/tag/v0.2.8)。上游源码继续使用 pgrx `0.16.1`，保留 `pg17` 构建特性，并提供 `pg_durable--0.2.7--0.2.8.sql` 升级路径。
+- `pg_durable 0.2.8` 为 `df.loop` 增加实验性的 `continue_on_failure` 参数，新增 `pg_durable.log_workflow_sql` 启动参数，修复长事务调用方的图交接，并加强 URL、查询参数及 HTTP 错误中的敏感信息脱敏。
+- 升级到 `0.2.8` 前，应先清空已在第 100,000 次迭代记录旧终止失败路径且要求连续回放的长循环；这类执行历史不能在新的 8,388,608 次循环上限下重放。
 - 从 `0.2.5` 或更早版本升级时，应检查是否存在依赖未公开函数 `df.ensure_durofut(text)` 的自定义对象；该函数已在 `0.2.6` 移除。应用不应持久化内部 `Durofut` JSON envelope 后跨版本回放。
 - `pg_duckdb 1.1.1` 仍是官方 GitHub 最新稳定源码版本，因此本次不改变其 pin 或接入范围。该上游 release 的 `pg_duckdb.control` 仍声明 SQL 扩展版本 `1.1.0`，且没有提供 `1.1.0--1.1.1.sql`；因此镜像中的 Nix 包路径是 `pg_duckdb-1.1.1`，PostgreSQL `extversion` 仍会显示 `1.1.0`，这是上游版本设计而非旧源码残留。
 - `pg_durable` 的 Cargo 依赖通过 crates.io 官方静态下载地址获取，避开 API 下载端点的 HTTP 403；仍使用上游 `Cargo.lock` 中的固定版本和 SHA-256 校验和。
