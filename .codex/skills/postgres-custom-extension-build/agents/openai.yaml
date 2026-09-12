@@ -1,4 +1,0 @@
-interface:
-  display_name: "Postgres Custom Extension Build"
-  short_description: "Add or upgrade PostgreSQL extensions safely"
-  default_prompt: "Use $postgres-custom-extension-build to add or upgrade a custom PostgreSQL extension, verify its latest stable GitHub release and PostgreSQL compatibility, and update the build and README."
