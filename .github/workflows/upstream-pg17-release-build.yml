@@ -509,6 +509,22 @@ jobs:
           floating_tag="${{ matrix.release.flavor }}"
           targeted_rebuild="${{ github.event_name == 'workflow_dispatch' && inputs.upstream_ref != '' }}"
 
+          extension_version() {
+            local extension="$1"
+            local version
+            version="$(sed -n 's/^[[:space:]]*version = "\([^"]*\)";.*/\1/p' "upstream/nix/ext/${extension}.nix" | head -n 1)"
+            if [ -z "$version" ]; then
+              echo "Could not read ${extension} version from patched release source" >&2
+              exit 1
+            fi
+            printf '%s' "$version"
+          }
+
+          pg_durable_version="$(extension_version pg_durable)"
+          if [ "$floating_tag" = "17" ]; then
+            pg_duckdb_version="$(extension_version pg_duckdb)"
+          fi
+
           {
             echo "PostgreSQL build based on Supabase upstream release \`${{ matrix.release.upstream_ref }}\`."
             echo
@@ -520,6 +536,13 @@ jobs:
             echo "- Upstream commit: \`${{ steps.source.outputs.upstream_sha }}\`"
             echo "- Patched source commit: \`${{ steps.source.outputs.source_sha }}\`"
             echo "- Source tag: \`${{ steps.source.outputs.source_tag }}\`"
+            echo
+            echo "## Custom extensions"
+            echo
+            echo "- \`pg_durable\`: \`${pg_durable_version}\`"
+            if [ "$floating_tag" = "17" ]; then
+              echo "- \`pg_duckdb\`: \`${pg_duckdb_version}\`"
+            fi
             echo
             echo "## Docker image"
             echo
