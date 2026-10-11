@@ -5,7 +5,8 @@ set -euo pipefail
 pg_root=$(realpath "${1:?Usage: test-pg-durable-upgrade.sh <postgres-package> <17|orioledb-17>}")
 flavor=${2:?PostgreSQL flavor is required}
 export PATH="$pg_root/bin:$PATH"
-export PGHOST=127.0.0.1 PGPORT=55439 PGUSER="$(whoami)" PGDATABASE=postgres
+PGUSER=$(whoami)
+export PGHOST=127.0.0.1 PGPORT=55439 PGUSER PGDATABASE=postgres
 test_root=$(mktemp -d)
 data=''
 cleanup() {
