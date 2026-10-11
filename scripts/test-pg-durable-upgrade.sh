@@ -66,17 +66,26 @@ SQL
     psql -X -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION pg_durable'
   fi
 
+  # Poll in separate transactions: an OrioleDB transaction keeps its snapshot
+  # and cannot observe the worker's readiness commit from a long-running DO.
+  dx_schema=$(psql -XAt -v ON_ERROR_STOP=1 -c 'SELECT df.duroxide_schema()')
+  case "$dx_schema" in
+    duroxide|_duroxide) ;;
+    *) echo "Unexpected provider schema: $dx_schema" >&2; exit 1 ;;
+  esac
+  ready=false
+  for _ in {1..60}; do
+    if [[ $(psql -XAt -v ON_ERROR_STOP=1 -c "SELECT to_regclass('$dx_schema._worker_ready') IS NOT NULL") == t ]] &&
+       [[ $(psql -XAt -v ON_ERROR_STOP=1 -c "SELECT EXISTS(SELECT 1 FROM $dx_schema._worker_ready WHERE schema_version >= 2)") == t ]]; then
+      ready=true
+      break
+    fi
+    sleep 0.5
+  done
+  if [[ "$ready" != true ]]; then echo 'Control runtime not ready' >&2; exit 1; fi
+
   psql -X -v ON_ERROR_STOP=1 <<'SQL'
-DO $$ DECLARE attempts integer := 0; ready boolean := false;
-  dx_schema text := df.duroxide_schema(); BEGIN
-  WHILE NOT ready AND attempts < 300 LOOP
-    IF to_regclass(format('%I._worker_ready', dx_schema)) IS NOT NULL THEN
-      EXECUTE format('SELECT EXISTS(SELECT 1 FROM %I._worker_ready WHERE schema_version >= 2)', dx_schema) INTO ready;
-    END IF;
-    IF NOT ready THEN PERFORM pg_sleep(0.1); END IF;
-    attempts := attempts + 1;
-  END LOOP;
-  IF NOT ready THEN RAISE EXCEPTION 'Control runtime not ready'; END IF;
+DO $$ BEGIN
   IF (SELECT extversion FROM pg_extension WHERE extname = 'pg_durable') <>
      (SELECT default_version FROM pg_available_extensions WHERE name = 'pg_durable') THEN
     RAISE EXCEPTION 'Extension version does not match the packaged version';
