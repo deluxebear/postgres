@@ -12,7 +12,7 @@
 
 let
   pname = "pg_durable";
-  version = "0.2.8";
+  version = "0.2.9";
   rustVersion = "1.88.0";
   pgrxVersion = "0.16.1";
   pgMajor = if postgresql.isOrioleDB or false then "17" else lib.versions.major postgresql.version;
@@ -27,7 +27,7 @@ let
 
     src = fetchurl {
       url = "https://github.com/microsoft/pg_durable/releases/download/v${version}/pg_durable-${version}.tar.gz";
-      hash = "sha256-OuYYakh1AAUgyu8vT9tWjpscvbJysaBtEnJW6JDtw8s=";
+      hash = "sha256-bwTe3awgBPKFT8Uz/xRR5+hzHQoTIYQv97xyrBXWBwc=";
     };
 
     nativeBuildInputs = [ cargo ];
@@ -56,13 +56,13 @@ let
     }) {
       lockFile = fetchurl {
         url = "https://raw.githubusercontent.com/microsoft/pg_durable/v${version}/Cargo.lock";
-        hash = "sha256-xld22By+Mt8oGsiJTp7/N3J0cYriBO4VgOB7Ou/tDVY=";
+        hash = "sha256-2TlyaUKXudH910/w12CiRg3+6JL57/S225Y3nFWJraY=";
       };
     };
 
+    # Since 0.2.9 HTTP policy is a runtime GUC (restricted by default).
     buildFeatures = [
       "pg${pgMajor}"
-      "http-allow-azure-domains"
     ];
 
     env = {

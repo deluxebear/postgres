@@ -6,13 +6,15 @@
 
 | 扩展 | 当前版本 | 上游地址 | 接入范围 | 是否预加载 | 说明 |
 | --- | --- | --- | --- | --- | --- |
-| `pg_durable` | `0.2.8` | `https://github.com/microsoft/pg_durable` | `psql_17`、`psql_17_slim`、`psql_orioledb-17`、`psql_orioledb-17_slim` | 是，追加 `pg_durable` | Durable SQL Functions for PostgreSQL。上游明确支持 PG17/PG18；本仓库将其作为标准 PG17 和 OrioleDB17 共享扩展构建。 |
+| `pg_durable` | `0.2.9` | `https://github.com/microsoft/pg_durable` | `psql_17`、`psql_17_slim`、`psql_orioledb-17`、`psql_orioledb-17_slim` | 是，追加 `pg_durable` | Durable SQL Functions for PostgreSQL。上游明确支持 PG17/PG18；本仓库将其作为标准 PG17 和 OrioleDB17 共享扩展构建。 |
 | `pg_duckdb` | `1.1.1` | `https://github.com/duckdb/pg_duckdb` | `psql_17`、`psql_17_slim` | 是，追加 `pg_duckdb` | DuckDB Embedded in Postgres。当前只接入标准 PG17；暂不接入 OrioleDB17，因为 OrioleDB 的 `TableAmRoutine` ABI 与标准 PostgreSQL 17 不兼容。 |
 
 ### 当前版本说明
 
-- `pg_durable 0.2.8` 是官方 GitHub 于 2026-09-11 发布的最新稳定版本，release 见 [v0.2.8](https://github.com/microsoft/pg_durable/releases/tag/v0.2.8)。上游源码继续使用 pgrx `0.16.1`，保留 `pg17` 构建特性，并提供 `pg_durable--0.2.7--0.2.8.sql` 升级路径。
-- `pg_durable 0.2.8` 为 `df.loop` 增加实验性的 `continue_on_failure` 参数，新增 `pg_durable.log_workflow_sql` 启动参数，修复长事务调用方的图交接，并加强 URL、查询参数及 HTTP 错误中的敏感信息脱敏。
+- `pg_durable 0.2.9` 是官方 GitHub 于 2026-10-07 发布的最新稳定版本，release 见 [v0.2.9](https://github.com/microsoft/pg_durable/releases/tag/v0.2.9)。上游源码继续使用 pgrx `0.16.1`，保留 `pg17` 构建特性，并提供 `pg_durable--0.2.8--0.2.9.sql` 升级路径。源码包和 `Cargo.lock` 均固定到该 release 并校验 SHA-256。
+- `0.2.9` 新增共享控制运行时的多数据库安装、`df.with_http_options`、HTTP 端点和显式 secret 绑定，并加强内部 SQL 的名称解析。HTTP 策略从 Cargo 特性迁移到需要重启的 `pg_durable.http_security` 参数，默认 `restricted`；通过 `pg_durable.http_allowed_domains` 配置域名。原有 `http-allow-azure-domains` 构建特性已移除，本仓库使用上游默认的 Azure 服务子域和 `api.github.com` 白名单。
+- 从 `0.2.8` 升级时，先安装新二进制并重启，等待控制运行时就绪，再执行 `ALTER EXTENSION pg_durable UPDATE TO '0.2.9'`，之后创建卫星数据库安装。为已有 HTTP 用户启用新增的端点接口时，重新调用 `df.grant_usage('角色名', include_http => true)`。此前禁用 HTTP 的部署应在重启前设置 `pg_durable.http_security = 'disabled'`。详见上游 [升级指南](https://github.com/microsoft/pg_durable/blob/v0.2.9/docs/upgrade-testing.md#v028--v029)。
+- `0.2.9` 的四目标构建及安装/SQL 升级验证通过 GitHub Actions 执行；下方已发布镜像的验证记录对应 `0.2.8`，不代表这些镜像已包含 `0.2.9`。
 - 升级到 `0.2.8` 前，应先清空已在第 100,000 次迭代记录旧终止失败路径且要求连续回放的长循环；这类执行历史不能在新的 8,388,608 次循环上限下重放。
 - 从 `0.2.5` 或更早版本升级时，应检查是否存在依赖未公开函数 `df.ensure_durofut(text)` 的自定义对象；该函数已在 `0.2.6` 移除。应用不应持久化内部 `Durofut` JSON envelope 后跨版本回放。
 - `pg_duckdb 1.1.1` 仍是官方 GitHub 最新稳定源码版本，因此本次不改变其 pin 或接入范围。该上游 release 的 `pg_duckdb.control` 仍声明 SQL 扩展版本 `1.1.0`，且没有提供 `1.1.0--1.1.1.sql`；因此镜像中的 Nix 包路径是 `pg_duckdb-1.1.1`，PostgreSQL `extversion` 仍会显示 `1.1.0`，这是上游版本设计而非旧源码残留。
