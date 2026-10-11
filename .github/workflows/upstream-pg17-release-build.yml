@@ -280,7 +280,8 @@ jobs:
       - name: Validate pg_durable installation and SQL upgrade
         working-directory: upstream
         run: |
-          bash ../.workflow/scripts/test-pg-durable-upgrade.sh result "${{ matrix.release.flavor }}"
+          bash ../.workflow/scripts/build-pg-durable-predecessor.sh "${{ matrix.release.flavor }}"
+          bash ../.workflow/scripts/test-pg-durable-upgrade.sh result "${{ matrix.release.flavor }}" previous-pg-durable
 
       - name: Set up Docker Buildx
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_docker }}
