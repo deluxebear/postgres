@@ -1,21 +1,20 @@
 { pkgs, ... }:
 let
-
-  go124 = pkgs.go_1_24;
-  buildGoModule124 = pkgs.buildGoModule.override { go = go124; };
-
-  upstream-gatekeeper = buildGoModule124 {
+  upstream-gatekeeper = pkgs.buildGoModule {
     pname = "jit-db-gatekeeper";
-    version = "1.0.2";
+    version = "1.0.5";
     src = pkgs.fetchFromGitHub {
       owner = "supabase";
       repo = "jit-db-gatekeeper";
-      rev = "v1.0.2";
-      sha256 = "sha256-YMbWvE2GrtVB3N7aw+HGb4sO+oGiU0PML9qC42uO51Y=";
+      rev = "v1.0.5";
+      sha256 = "sha256-z+TE9Cc+NL6nvCIkAKFdSgm4V/1K45tRRnfQdauDjes=";
     };
     vendorHash = null;
 
     buildInputs = [ pkgs.pam ];
+
+    # dlopen'd into PAM, which already links these libs
+    NIX_DONT_SET_RPATH = pkgs.stdenv.isLinux;
 
     buildPhase = ''
       runHook preBuild
@@ -34,7 +33,7 @@ in
 
 pkgs.stdenv.mkDerivation {
   pname = "gatekeeper";
-  version = "1.0.2";
+  version = "1.0.5";
 
   buildInputs = [ upstream-gatekeeper ];
 
