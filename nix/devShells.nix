@@ -21,17 +21,6 @@
           paramiko
         ]
       );
-      mkCargoPgrxDevShell =
-        { pgrxVersion, rustVersion }:
-        pkgs.mkShell {
-          packages = with pkgs; [
-            self'.packages."cargo-pgrx_${pgrxVersion}"
-            (rust-bin.stable.${rustVersion}.default.override { extensions = [ "rust-src" ]; })
-          ];
-          shellHook = ''
-            export HISTFILE=.history
-          '';
-        };
       docvenv = pkgs.python3.buildEnv.override {
         extraLibs = self'.packages.docs.nativeBuildInputs;
       };
@@ -53,6 +42,7 @@
             nushell
             pythonEnv
             config.treefmt.build.wrapper
+            pre-commit
           ];
           devshell.startup.pre-commit.text = config.pre-commit.installationScript;
           commands = [
@@ -103,12 +93,6 @@
               category = "ami";
             }
             {
-              name = "build-test-ami";
-              help = "Build AMI images for PostgreSQL testing";
-              command = "${lib.getExe self'.packages.build-test-ami} $@";
-              category = "ami";
-            }
-            {
               name = "sync-exts-versions";
               help = "Update extensions versions";
               command = "${lib.getExe self'.packages.sync-exts-versions}";
@@ -145,14 +129,6 @@
               category = "postgres";
             }
           ];
-        };
-        cargo-pgrx_0_11_3 = mkCargoPgrxDevShell {
-          pgrxVersion = "0_11_3";
-          rustVersion = "1.80.0";
-        };
-        cargo-pgrx_0_12_6 = mkCargoPgrxDevShell {
-          pgrxVersion = "0_12_6";
-          rustVersion = "1.80.0";
         };
       };
     };
