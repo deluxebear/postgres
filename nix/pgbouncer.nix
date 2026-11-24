@@ -6,15 +6,22 @@
   libevent,
   c-ares,
   pkg-config,
-  systemd,
+  systemdLibs,
   nixosTests,
   pandoc,
   python3,
 }:
 
+let
+  # Renovate updates this tag, and the workflow refreshes the hash below.
+  # The Git tags look like pgbouncer_1_25_1.
+  # We keep the tag here and build the version from it.
+  # renovate: datasource=github-tags depName=pgbouncer packageName=pgbouncer/pgbouncer versioning=regex:^pgbouncer_(?<major>\d+)_(?<minor>\d+)_(?<patch>\d+)$
+  tag = "pgbouncer_1_25_1";
+in
 stdenv.mkDerivation rec {
   pname = "pgbouncer";
-  version = "1.25.1";
+  version = lib.replaceStrings [ "_" ] [ "." ] (lib.removePrefix "pgbouncer_" tag);
 
   src = fetchurl {
     url = "https://www.pgbouncer.org/downloads/files/${version}/${pname}-${version}.tar.gz";
@@ -31,7 +38,7 @@ stdenv.mkDerivation rec {
     openssl
     c-ares
   ]
-  ++ lib.optional stdenv.hostPlatform.isLinux systemd;
+  ++ lib.optional stdenv.hostPlatform.isLinux systemdLibs;
   enableParallelBuilding = true;
   configureFlags = lib.optional stdenv.hostPlatform.isLinux "--with-systemd";
 
@@ -47,7 +54,6 @@ stdenv.mkDerivation rec {
       replaceStrings [ "." ] [ "_" ] version
     }";
     license = licenses.isc;
-    maintainers = with maintainers; [ _1000101 ];
     platforms = platforms.all;
   };
 }

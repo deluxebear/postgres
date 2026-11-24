@@ -16,6 +16,8 @@ let
       psql-version = psql_17_cli.bin.version;
       extensions = [
         "supautils"
+        "pg_duckdb"
+        "pg_durable"
         "pg_graphql"
         "pgsodium"
         "supabase_vault"
@@ -235,6 +237,7 @@ stdenv.mkDerivation {
 
     # Add receipt
     cp ${receipt}/receipt.json $out/cli-receipt.json
+    cp ${../../portable-release.json} $out/portable-release.json
   '';
 
   installPhase = ''

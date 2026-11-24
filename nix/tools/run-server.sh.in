@@ -159,7 +159,8 @@ else
 fi
 
 # Set environment variables and paths
-export PATH=$BINDIR/bin:$PATH
+# Only the postgres binaries and the tools listed in lib.nix, nothing from the caller
+export PATH=$BINDIR/bin:@TOOLS_PATH@
 PGSQL_SUPERUSER=@PGSQL_SUPERUSER@
 PSQL_CONF_FILE=@PSQL_CONF_FILE@
 PORTNO="${PORTNO:-@PGSQL_DEFAULT_PORT@}"
@@ -243,8 +244,14 @@ vault.getkey_script = '$PGSODIUM_GETKEY_SCRIPT'" \
 -e "s|include = '/etc/postgresql-custom/read-replica.conf'|include = '$DATDIR/read-replica.conf'|" \
 -e "\$a\\
 session_preload_libraries = 'supautils'" \
+-e "$ a output_plugin_libraries = 'pgoutput, test_decoding, wal2json'" \
 -e "s|include_dir = '/etc/postgresql-custom/conf.d'|include_dir = '$DATDIR/conf.d'|" \
 "$PSQL_CONF_FILE" > "$DATDIR/postgresql.conf"
+
+# summarize_wal is PostgreSQL 17+; PG15 refuses to start on an unknown GUC
+if [ "$VERSION" != "15" ]; then
+    perl -pi -e 's/^#summarize_wal = off/summarize_wal = on/' "$DATDIR/postgresql.conf"
+fi
 
 # Function to configure OrioleDB specific settings
 orioledb_config_items() {
@@ -254,7 +261,7 @@ orioledb_config_items() {
         sed -i 's/ timescaledb,//g;' "$DATDIR/postgresql.conf"
         sed -i 's/db_user_namespace = off/#db_user_namespace = off/g;' "$DATDIR/postgresql.conf"
         sed -i 's/ timescaledb,//g; s/ plv8,//g; s/ pgjwt,//g;' "$DATDIR/supautils.conf"
-        sed -i 's/\(shared_preload_libraries.*\)'\''\(.*\)$/\1, orioledb, pg_durable'\''\2/' "$DATDIR/postgresql.conf"
+        sed -i 's/\(shared_preload_libraries.*\)'\''\(.*\)$/\1, orioledb'\''\2/' "$DATDIR/postgresql.conf"
         echo "default_table_access_method = 'orioledb'" >> "$DATDIR/postgresql.conf"
     elif [[ "$1" = "orioledb-17" && "$CURRENT_SYSTEM" = "aarch64-darwin" ]]; then
         # macOS specific configuration
@@ -268,7 +275,7 @@ orioledb_config_items() {
         perl -pi -e 's/ timescaledb,//g' "$DATDIR/supautils.conf"
         perl -pi -e 's/ plv8,//g' "$DATDIR/supautils.conf"
         perl -pi -e 's/ pgjwt,//g' "$DATDIR/supautils.conf"
-        perl -pi -e 's/(shared_preload_libraries\s*=\s*'\''.*?)'\''/\1, orioledb, pg_durable'\''/' "$DATDIR/postgresql.conf"
+        perl -pi -e 's/(shared_preload_libraries\s*=\s*'\''.*?)'\''/\1, orioledb'\''/' "$DATDIR/postgresql.conf"
         
         echo "default_table_access_method = 'orioledb'" >> "$DATDIR/postgresql.conf"
     elif [[ "$VERSION" == "17" && "$CURRENT_SYSTEM" != "aarch64-darwin" ]]; then
@@ -276,13 +283,11 @@ orioledb_config_items() {
         sed -i 's/ timescaledb,//g;' "$DATDIR/postgresql.conf"
         sed -i 's/db_user_namespace = off/#db_user_namespace = off/g;' "$DATDIR/postgresql.conf"
         sed -i 's/ timescaledb,//g; s/ plv8,//g;' "$DATDIR/supautils.conf"
-        sed -i 's/\(shared_preload_libraries.*\)'\''\(.*\)$/\1, pg_duckdb, pg_durable'\''\2/' "$DATDIR/postgresql.conf"
     elif [[ "$VERSION" == "17" && "$CURRENT_SYSTEM" = "aarch64-darwin" ]]; then
         perl -pi -e 's/db_user_namespace = off/#db_user_namespace = off/g;' "$DATDIR/postgresql.conf"
         perl -pi -e 's/ timescaledb,//g' "$DATDIR/postgresql.conf"
         perl -pi -e 's/ timescaledb,//g' "$DATDIR/supautils.conf"
         perl -pi -e 's/ plv8,//g;' "$DATDIR/supautils.conf"
-        perl -pi -e 's/(shared_preload_libraries\s*=\s*'\''.*?)'\''/\1, pg_duckdb, pg_durable'\''/' "$DATDIR/postgresql.conf"
     fi
 }
 

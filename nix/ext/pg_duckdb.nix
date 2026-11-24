@@ -19,8 +19,8 @@ let
   version = "1.2.2";
 
   src = fetchurl {
-    url = "https://github.com/duckdb/pg_duckdb/archive/refs/tags/v${version}.tar.gz";
-    hash = "sha256-53ez3z87qbuHKfaK0pAB7itO5T9WvRXVU5qpirCydWo=";
+    url = "https://github.com/duckdb/pg_duckdb/archive/4e921ffbe4a16b3caec6cf24ca0151fa9d88032d.tar.gz";
+    hash = "sha256-EhFwPzxmoHlL5W/WhrCyC1FG1nOPvtOJtf8cEaSBLk4=";
   };
 
   duckdbSrc = fetchurl {

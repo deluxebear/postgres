@@ -1,7 +1,12 @@
 { inputs, ... }:
 {
   perSystem =
-    { pkgs, lib, self', ... }:
+    {
+      pkgs,
+      lib,
+      self',
+      ...
+    }:
     let
       # Minimal glibc locales for slim images - only en_US.UTF-8 (~3MB vs ~200MB)
       glibcLocalesMinimal = pkgs.glibcLocales.override {
@@ -48,6 +53,7 @@
         ../ext/hypopg.nix
         ../ext/pg_tle.nix
         ../ext/wrappers/default.nix
+        # Remove only after initiate.sh and existing hosts use the site profile.
         ../ext/supautils.nix
         ../ext/plv8
       ];
@@ -56,22 +62,16 @@
       # plus the orioledb option
       #we're not using timescaledb or plv8 in the orioledb-17 version or pg 17 of supabase extensions
       orioleFilteredExtensions = builtins.filter (
-        x: x != ../ext/timescaledb.nix && x != ../ext/timescaledb-2.9.1.nix && x != ../ext/plv8
+        x: x != ../ext/timescaledb.nix && x != ../ext/plv8
       ) ourExtensions;
 
-      pg17StandardOnlyExtensions = [
-        ../ext/pg_duckdb.nix
-      ];
-
-      pg17SharedExtensions = [
-        ../ext/pg_durable.nix
-      ];
-
-      orioledbExtensions = orioleFilteredExtensions ++ pg17SharedExtensions ++ [ ../ext/orioledb.nix ];
-      dbExtensions17 = orioleFilteredExtensions ++ pg17StandardOnlyExtensions ++ pg17SharedExtensions;
+      orioledbExtensions = orioleFilteredExtensions ++ [ ../ext/orioledb.nix ];
+      dbExtensions17 = orioleFilteredExtensions;
 
       # CLI extensions - minimal set for Supabase CLI with migration support
       cliExtensions = [
+        ../ext/pg_duckdb.nix
+        ../ext/pg_durable.nix
         ../ext/supautils.nix
         ../ext/pg_graphql
         ../ext/pgsodium.nix
@@ -216,6 +216,9 @@
             (makeReceipt pgbin ourExts)
           ]
           ++ extraPaths;
+          passthru = {
+            inherit version;
+          };
         };
 
       # Create an attribute set, containing all the relevant packages for a

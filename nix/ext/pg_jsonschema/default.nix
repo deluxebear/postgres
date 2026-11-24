@@ -17,7 +17,7 @@ let
     let
       cargo = rust-bin.stable.${rustVersion}.default;
       mkPgrxExtension = callPackages ../../cargo-pgrx/mkPgrxExtension.nix {
-        inherit rustVersion pgrxVersion;
+        inherit rustVersion pgrxVersion rust-bin;
       };
       src = fetchFromGitHub {
         owner = "supabase";
@@ -145,7 +145,7 @@ let
   versionsBuilt = if latestOnly then [ latestVersion ] else versions;
   numberOfVersionsBuilt = builtins.length versionsBuilt;
 in
-(pkgs.buildEnv {
+pkgs.buildEnv {
   name = pname;
   paths = packages;
   nativeBuildInputs = [ makeWrapper ];
@@ -184,6 +184,7 @@ in
   '';
 
   passthru = {
+    perVersion = lib.mapAttrs (name: value: build name value.hash value.rust value.pgrx) versionsToUse;
     versions = versionsBuilt;
     numberOfVersions = numberOfVersionsBuilt;
     inherit pname latestOnly;
@@ -193,7 +194,4 @@ in
       else
         "multi-" + lib.concatStringsSep "-" (map (v: lib.replaceStrings [ "." ] [ "-" ] v) versions);
   };
-}).overrideAttrs
-  (_: {
-    requiredSystemFeatures = [ "big-parallel" ];
-  })
+}

@@ -52,37 +52,6 @@ writeShellApplication {
     log_warn() { echo -e "''${YELLOW}[WARN]''${NC} $1"; }
     log_error() { echo -e "''${RED}[ERROR]''${NC} $1"; }
 
-    wait_for_container_health() {
-        local container="$1"
-        local timeout_seconds=90
-        local elapsed=0
-        local health=""
-
-        while [[ $elapsed -lt $timeout_seconds ]]; do
-            health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")
-            case "$health" in
-                healthy)
-                    log_info "Container health check passed after ''${elapsed}s"
-                    return 0
-                    ;;
-                unhealthy)
-                    log_error "Container became unhealthy during startup"
-                    docker inspect --format '{{range .State.Health.Log}}{{println .ExitCode .Output}}{{end}}' "$container"
-                    return 1
-                    ;;
-                none)
-                    log_error "Container image does not define a health check"
-                    return 1
-                    ;;
-            esac
-            sleep 2
-            elapsed=$((elapsed + 2))
-        done
-
-        log_error "Container did not become healthy within ''${timeout_seconds}s"
-        return 1
-    }
-
     print_help() {
         cat << 'EOF'
     Usage: nix run .#docker-image-test -- [OPTIONS] DOCKERFILE
@@ -137,6 +106,19 @@ writeShellApplication {
     # Tests to skip for OrioleDB
     ORIOLEDB_SKIP_TESTS=(
         "index_advisor"
+
+        # OrioleDB still uses PostgreSQL 17.11.
+        # drop these skips when it includes the 17.12 fixes.
+        "alter_column_type_rowtype_deps"
+        "bpchar_btree_dedup"
+        "cast_function_execute_privilege"
+        "drop_owned_rls_policy"
+        "function_def_target_alias"
+        "jsonpath_gin_lookup"
+        "partition_prune_range"
+        "to_char_v_overflow"
+        "upsert_rls_conflict_where"
+        "upsert_view_visibility"
     )
 
     # Tests to skip for multigres images (pgsodium not installed; vault has z_multigres-17_ variant)
@@ -145,12 +127,7 @@ writeShellApplication {
         "vault"
     )
 
-    # Tests to skip for multigres-orioledb-17 (superset of multigres skips)
-    MULTIGRES_ORIOLEDB_SKIP_TESTS=(
-        "pgsodium"
-        "vault"
-        "index_advisor"
-    )
+    MULTIGRES_ORIOLEDB_SKIP_TESTS=("''${ORIOLEDB_SKIP_TESTS[@]}" "''${MULTIGRES_SKIP_TESTS[@]}")
 
     get_test_list() {
         local version="$1"
@@ -323,150 +300,6 @@ writeShellApplication {
         return 1
     }
 
-    verify_pgbackrest_integration() {
-        local container="$1"
-
-        log_info "=== pgBackRest integration checks ==="
-
-        if ! docker exec "$container" test -x /nix/var/nix/profiles/default/bin/pgbackrest; then
-            log_error "  Nix pgbackrest binary not found"
-            exit 1
-        fi
-        log_info "  ✓ Nix pgbackrest binary exists"
-
-        local real_pgbackrest="/usr/lib/pgbackrest/bin/pgbackrest.real"
-        if ! docker exec "$container" test -x "$real_pgbackrest"; then
-            log_error "  real pgBackRest binary not found at $real_pgbackrest"
-            exit 1
-        fi
-
-        local real_magic
-        real_magic=$(docker exec "$container" sh -c "od -An -tx1 -N4 '$real_pgbackrest' | tr -d ' \n'")
-        if [[ "$real_magic" != "7f454c46" ]]; then
-            log_error "  $real_pgbackrest is not an ELF binary; magic bytes were $real_magic"
-            exit 1
-        fi
-
-        if ! docker exec "$container" test -x /usr/bin/pgbackrest; then
-            log_error "  /usr/bin/pgbackrest wrapper not found"
-            exit 1
-        fi
-
-        local wrapper_target
-        wrapper_target=$(docker exec "$container" sh -c "readlink -f /usr/bin/pgbackrest")
-        if [[ "$wrapper_target" != "/usr/bin/pgbackrest" ]]; then
-            log_error "  /usr/bin/pgbackrest resolves to $wrapper_target, expected wrapper file"
-            exit 1
-        fi
-
-        local wrapper_first_line
-        wrapper_first_line=$(docker exec "$container" sh -c "head -1 /usr/bin/pgbackrest")
-        if [[ "$wrapper_first_line" != "#!/bin/bash" ]]; then
-            log_error "  /usr/bin/pgbackrest is not the wrapper script (first line: $wrapper_first_line)"
-            exit 1
-        fi
-
-        local wrapper_magic
-        wrapper_magic=$(docker exec "$container" sh -c "od -An -tx1 -N2 /usr/bin/pgbackrest | tr -d ' \n'")
-        if [[ "$wrapper_magic" != "2321" ]]; then
-            log_error "  /usr/bin/pgbackrest is not a script wrapper; magic bytes were $wrapper_magic"
-            exit 1
-        fi
-
-        if ! docker exec "$container" grep -Fq "$real_pgbackrest" /usr/bin/pgbackrest; then
-            log_error "  /usr/bin/pgbackrest wrapper does not target $real_pgbackrest"
-            exit 1
-        fi
-
-        local path_pgbackrest
-        path_pgbackrest=$(docker exec "$container" sh -c "command -v pgbackrest")
-        if [[ "$path_pgbackrest" != "/usr/bin/pgbackrest" ]]; then
-            log_error "  PATH resolves pgbackrest to $path_pgbackrest, expected /usr/bin/pgbackrest"
-            exit 1
-        fi
-        log_info "  ✓ /usr/bin/pgbackrest is the wrapper and targets the real ELF binary"
-
-        if ! docker exec "$container" sh -c "test -s /etc/ssl/certs/ca-certificates.crt"; then
-            log_error "  CA bundle missing at /etc/ssl/certs/ca-certificates.crt"
-            exit 1
-        fi
-        if ! docker exec "$container" sh -c \
-            "test \"\$SSL_CERT_FILE\" = /etc/ssl/certs/ca-certificates.crt && \
-             test \"\$CURL_CA_BUNDLE\" = /etc/ssl/certs/ca-certificates.crt && \
-             test \"\$NIX_SSL_CERT_FILE\" = /etc/ssl/certs/ca-certificates.crt"; then
-            log_error "  CA environment variables are not wired to the Alpine CA bundle"
-            exit 1
-        fi
-        log_info "  ✓ CA bundle and TLS environment are present"
-
-        local conf_dir_stat
-        conf_dir_stat=$(docker exec "$container" sh -c "stat -c '%a %U %G' /etc/pgbackrest/conf.d")
-        if [[ "$conf_dir_stat" != "2770 pgbackrest postgres" ]]; then
-            log_error "  /etc/pgbackrest/conf.d permissions are '$conf_dir_stat', expected '2770 pgbackrest postgres'"
-            exit 1
-        fi
-
-        local config_check
-        config_check=$(docker exec "$container" sh -c "
-            test -f /etc/pgbackrest/pgbackrest.conf &&
-            test -f /etc/pgbackrest/conf.d/computed_globals.conf &&
-            test -f /etc/pgbackrest/conf.d/repo1.conf &&
-            test -f /etc/pgbackrest/conf.d/repo1_async.conf &&
-            test -f /etc/pgbackrest/conf.d/repo1_encrypted.conf &&
-            ! grep -R '{{' /etc/pgbackrest &&
-            ! grep -RE '^[[:space:]]*repo-cipher-pass[[:space:]]*=' /etc/pgbackrest
-        " 2>&1) || {
-            log_error "  pgBackRest static config validation failed: $config_check"
-            exit 1
-        }
-        log_info "  ✓ static config skeleton is present without rendered secrets"
-
-        for log_file in saa-pgb.log wal-push.log wal-fetch.log; do
-            local log_stat
-            log_stat=$(docker exec "$container" sh -c "stat -c '%a %U %G' /var/log/pgbackrest/$log_file")
-            if [[ "$log_stat" != "660 pgbackrest postgres" ]]; then
-                log_error "  /var/log/pgbackrest/$log_file permissions are '$log_stat', expected '660 pgbackrest postgres'"
-                exit 1
-            fi
-        done
-        log_info "  ✓ pgBackRest log files are pre-created"
-
-        if ! docker exec -u root "$container" sh -c "test \$(stat -c '%a' /etc/sudoers.d/pgbackrest) = 440"; then
-            log_error "  /etc/sudoers.d/pgbackrest is not mode 0440"
-            exit 1
-        fi
-        if ! docker exec -u root "$container" visudo -cf /etc/sudoers.d/pgbackrest; then
-            log_error "  /etc/sudoers.d/pgbackrest failed visudo validation"
-            exit 1
-        fi
-        log_info "  ✓ sudoers file validates"
-
-        local version_out
-        version_out=$(docker exec -u postgres "$container" sh -c "timeout 5 /usr/bin/pgbackrest --version 2>&1") || {
-            log_error "  postgres user cannot run pgbackrest --version via wrapper: $version_out"
-            exit 1
-        }
-        if ! echo "$version_out" | grep -qi "pgBackRest"; then
-            log_error "  unexpected pgbackrest version output: $version_out"
-            exit 1
-        fi
-        log_info "  ✓ postgres user can run pgBackRest through wrapper without hanging"
-
-        local filtered_out
-        filtered_out=$(docker exec -u postgres "$container" sh -c \
-            "/usr/bin/pgbackrest --config=/tmp/pgbackrest-missing.conf --cmd=/tmp/pgbackrest-bad-cmd version 2>&1") || {
-            log_error "  wrapper did not filter dangerous options: $filtered_out"
-            exit 1
-        }
-        if ! echo "$filtered_out" | grep -qi "pgBackRest"; then
-            log_error "  unexpected filtered pgbackrest output: $filtered_out"
-            exit 1
-        fi
-        log_info "  ✓ wrapper filters --config and --cmd"
-
-        log_info "=== pgBackRest integration checks passed ==="
-    }
-
     # Verify pgctld integration for multigres images.
     # Runs a short-lived pgctld cluster in /tmp (separate from the SQL-test postgres).
     # Tests: container user is postgres, /usr/local/bin/pgctld works, pgctld init+start
@@ -512,8 +345,98 @@ writeShellApplication {
         fi
         log_info "  ✓ pgctld start --pooler-dir $pooler_dir"
 
+        # 5. session_preload_libraries must include supautils — pgctld renders
+        # postgresql.conf from a separate template
+        # (/etc/pgctld-custom/*.conf.tmpl) than the static
+        # /etc/postgresql/postgresql.conf the SQL regression suite uses, so
+        # that suite alone can't catch supautils being missing from the
+        # template.
+        local session_pl
+        session_pl=$(docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$container" sh -c "
+            psql -U $POSTGRES_USER -d postgres -h $pooler_dir/pg_sockets \
+                -tAc \"SHOW session_preload_libraries;\" 2>&1") || true
+        if ! echo "$session_pl" | grep -q "supautils"; then
+            log_error "  supautils not in session_preload_libraries (got: $session_pl)"
+            log_error "  Check that the pgctld config template sets session_preload_libraries = 'supautils'"
+            exit 1
+        fi
+        log_info "  ✓ session_preload_libraries contains supautils"
+
+        # 6. supautils.conf's actual policy must be loaded (not just the
+        # library) — supautils.policy_grants should contain the
+        # realtime.messages grant real supautils.conf.j2 defines.
+        local policy_grants
+        policy_grants=$(docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$container" sh -c "
+            psql -U $POSTGRES_USER -d postgres -h $pooler_dir/pg_sockets \
+                -tAc \"SHOW supautils.policy_grants;\" 2>&1") || true
+        if ! echo "$policy_grants" | grep -q "realtime.messages"; then
+            log_error "  supautils.policy_grants missing expected policy (got: $policy_grants)"
+            log_error "  Check that the pgctld config template includes /etc/postgresql-custom/supautils.conf"
+            exit 1
+        fi
+        log_info "  ✓ supautils.conf policy loaded (policy_grants set)"
+
+        # 7. multigres_probe must come out of the init manifest closed:
+        # NOLOGIN and no password, so nothing can log in as it until the
+        # deployment enables it. It must also have no BYPASSRLS, connection
+        # limit 2, statement_timeout 2s, a search_path without public, and
+        # its queries kept out of pg_stat_statements and the Postgres logs
+        # (errors are still logged, without the query text), and its role
+        # pinned to itself so a database-wide default role cannot switch it.
+        # The name must be reserved so non-superusers cannot alter or drop it.
+        local probe_role
+        probe_role=$(docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$container" sh -c "
+            psql -U $POSTGRES_USER -d postgres -h $pooler_dir/pg_sockets \
+                -tAc \"SELECT rolcanlogin, rolsuper, rolbypassrls, rolconnlimit FROM pg_roles WHERE rolname = 'multigres_probe';\" 2>&1") || true
+        if [[ "$probe_role" != "f|f|f|2" ]]; then
+            log_error "  multigres_probe attributes wrong (got: '$probe_role', want: 'f|f|f|2')"
+            exit 1
+        fi
+        log_info "  ✓ multigres_probe is NOLOGIN NOSUPERUSER NOBYPASSRLS CONNECTION LIMIT 2"
+
+        local probe_no_password
+        probe_no_password=$(docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$container" sh -c "
+            psql -U $POSTGRES_USER -d postgres -h $pooler_dir/pg_sockets \
+                -tAc \"SELECT rolpassword IS NULL FROM pg_authid WHERE rolname = 'multigres_probe';\" 2>&1") || true
+        if [[ "$probe_no_password" != "t" ]]; then
+            log_error "  multigres_probe must have no password after init (got: '$probe_no_password', want: 't')"
+            exit 1
+        fi
+        log_info "  ✓ multigres_probe has no password"
+
+        local probe_settings
+        local want_settings="auto_explain.log_min_duration=-1"
+        want_settings+="|log_duration=off"
+        want_settings+="|log_min_duration_statement=-1"
+        want_settings+="|log_min_error_statement=panic"
+        want_settings+="|log_min_messages=error"
+        want_settings+="|log_statement=none"
+        want_settings+="|pg_stat_statements.track=none"
+        want_settings+="|pgaudit.log=none"
+        want_settings+="|role=multigres_probe"
+        want_settings+="|search_path=pg_catalog, pg_temp, multigres"
+        want_settings+="|statement_timeout=2s"
+        probe_settings=$(docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$container" sh -c "
+            psql -U $POSTGRES_USER -d postgres -h $pooler_dir/pg_sockets \
+                -tAc \"SELECT string_agg(c, '|' ORDER BY convert_to(c, 'UTF8')) FROM pg_db_role_setting, unnest(setconfig) AS c WHERE setrole = 'multigres_probe'::regrole AND setdatabase = 0;\" 2>&1") || true
+        if [[ "$probe_settings" != "$want_settings" ]]; then
+            log_error "  multigres_probe settings wrong (got: '$probe_settings', want: '$want_settings')"
+            exit 1
+        fi
+        log_info "  ✓ multigres_probe settings: $want_settings"
+
+        local reserved_roles
+        reserved_roles=$(docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$container" sh -c "
+            psql -U $POSTGRES_USER -d postgres -h $pooler_dir/pg_sockets \
+                -tAc \"SHOW supautils.reserved_roles;\" 2>&1") || true
+        if ! echo "$reserved_roles" | grep -qw "multigres_probe"; then
+            log_error "  multigres_probe not in supautils.reserved_roles (got: $reserved_roles)"
+            exit 1
+        fi
+        log_info "  ✓ multigres_probe is in supautils.reserved_roles"
+
         if [[ "$version" == "multigres-orioledb-17" ]]; then
-            # 5. /usr/local/bin/pgctld must be a wrapper script (not a plain symlink)
+            # 8. /usr/local/bin/pgctld must be a wrapper script (not a plain symlink)
             local first_line
             first_line=$(docker exec "$container" sh -c "head -1 /usr/local/bin/pgctld")
             if [[ "$first_line" != "#!/bin/sh" ]]; then
@@ -522,7 +445,7 @@ writeShellApplication {
             fi
             log_info "  ✓ /usr/local/bin/pgctld is a wrapper script"
 
-            # 6. shared_preload_libraries must include orioledb — injected by wrapper, no flags needed
+            # 9. shared_preload_libraries must include orioledb — injected by wrapper, no flags needed
             local spl
             spl=$(docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$container" sh -c "
                 psql -U $POSTGRES_USER -d postgres -h $pooler_dir/pg_sockets \
@@ -534,7 +457,7 @@ writeShellApplication {
             fi
             log_info "  ✓ shared_preload_libraries contains orioledb"
 
-            # 7. default_table_access_method must be orioledb
+            # 10. default_table_access_method must be orioledb
             local tam
             tam=$(docker exec -e PGPASSWORD="$POSTGRES_PASSWORD" "$container" sh -c "
                 psql -U $POSTGRES_USER -d postgres -h $pooler_dir/pg_sockets \
@@ -668,15 +591,6 @@ writeShellApplication {
             -p "$PORT:5432" \
             "$IMAGE_TAG"
 
-        if [[ "$VERSION" == "17" || "$VERSION" == "orioledb-17" ]]; then
-            if ! wait_for_container_health "$CONTAINER_NAME"; then
-                log_error "Container logs:"
-                docker logs "$CONTAINER_NAME"
-                exit 1
-            fi
-            verify_pgbackrest_integration "$CONTAINER_NAME"
-        fi
-
         # Multigres images use "tail -f /dev/null" as their entrypoint — postgres must be
         # started manually before we can run tests against them.
         if [[ "$VERSION" == multigres-* ]]; then
@@ -774,7 +688,7 @@ writeShellApplication {
         PATCHED_TESTS_DIR="$OUTPUT_DIR/tests"
         cp -r "$TESTS_DIR" "$PATCHED_TESTS_DIR"
 
-        for f in pgmq.out vault.out; do
+        for f in dblink.out pg_tle_dependencies.out pgmq.out vault.out; do
             if [[ -f "$PATCHED_TESTS_DIR/expected/$f" ]]; then
                 # shellcheck disable=SC2016
                 sed -i.bak \

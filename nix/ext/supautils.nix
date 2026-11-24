@@ -8,27 +8,36 @@
 stdenv.mkDerivation rec {
   pname = "supautils";
   name = pname;
-  version = "3.2.2";
+  # renovate: datasource=github-tags depName=supautils packageName=supabase/supautils extractVersion=^v(?<version>.+)$
+  version = "4.0.1";
 
   buildInputs = [ postgresql ];
+
+  separateDebugInfo = true;
+
+  # dlopen'd into postgres, which already links these libs
+  NIX_DONT_SET_RPATH = stdenv.isLinux;
 
   src = fetchFromGitHub {
     owner = "supabase";
     repo = pname;
     rev = "refs/tags/v${version}";
-    hash = "sha256-Oi35fel2Yp58eHsWVOXtxAo/s0RAbUxJEBxPrYRK+cs=";
+    hash = "sha256-Cyl54fWuHsAOkYrCPUFSIjqYeeKUIsvFSDqyBqpEm7E=";
   };
 
+  # remove once all Ubuntu 20.04 (glibc 2.31) hosts are decommissioned
+  patches = [ ./patches/supautils-strtol-glibc-compat.patch ];
+
   installPhase = ''
-    mkdir -p $out/lib
+    mkdir -p $out/lib/postgresql
 
     install -D *${postgresql.dlSuffix} -t $out/lib
+    ln -s ../supautils${postgresql.dlSuffix} $out/lib/postgresql/supautils${postgresql.dlSuffix}
   '';
 
   meta = with lib; {
     description = "PostgreSQL extension for enhanced security";
     homepage = "https://github.com/supabase/${pname}";
-    maintainers = with maintainers; [ steve-chavez ];
     platforms = postgresql.meta.platforms;
     license = licenses.postgresql;
   };

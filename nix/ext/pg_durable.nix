@@ -26,8 +26,8 @@ let
     inherit pname version postgresql;
 
     src = fetchurl {
-      url = "https://github.com/microsoft/pg_durable/releases/download/v${version}/pg_durable-${version}.tar.gz";
-      hash = "sha256-bwTe3awgBPKFT8Uz/xRR5+hzHQoTIYQv97xyrBXWBwc=";
+      url = "https://github.com/microsoft/pg_durable/releases/download/v0.2.9/pg_durable-0.2.9.tar.gz";
+    hash = "sha256-bwTe3awgBPKFT8Uz/xRR5+hzHQoTIYQv97xyrBXWBwc=";
     };
 
     nativeBuildInputs = [ cargo ];
@@ -55,8 +55,8 @@ let
         );
     }) {
       lockFile = fetchurl {
-        url = "https://raw.githubusercontent.com/microsoft/pg_durable/v${version}/Cargo.lock";
-        hash = "sha256-2TlyaUKXudH910/w12CiRg3+6JL57/S225Y3nFWJraY=";
+        url = "https://raw.githubusercontent.com/microsoft/pg_durable/2ccb746756e1071b24172b541f7af130166c0c6b/Cargo.lock";
+    hash = "sha256-2TlyaUKXudH910/w12CiRg3+6JL57/S225Y3nFWJraY=";
       };
     };
 

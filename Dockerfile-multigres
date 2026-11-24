@@ -27,15 +27,12 @@ RUN cat <<EOF > /tmp/extra-nix.conf
 extra-experimental-features = nix-command flakes
 extra-substituters = https://nix-postgres-artifacts.s3.amazonaws.com
 extra-trusted-public-keys = nix-postgres-artifacts:dGZlQOvKcNEjvT7QEAJbcV6b6uk7VF/hWMjhYleiaLI=
-filter-syscalls = false
 EOF
-ENV NIX_CONFIG="filter-syscalls = false"
-RUN curl --fail --show-error --silent --location \
-        --retry 5 --retry-delay 2 --retry-all-errors \
-        --output /tmp/nix-install \
-        https://releases.nixos.org/nix/nix-2.34.6/install && \
-    sh /tmp/nix-install --daemon --no-channel-add --yes \
-        --nix-extra-conf-file /tmp/extra-nix.conf && \
+ARG NIX_VERSION=2.35.3
+ARG NIX_INSTALLER_HASH=69d0fe8fba8fe88f94c98b09964691ac9950abc7ecbf2ba861dc0533cfd901e9
+RUN curl -fsSL "https://releases.nixos.org/nix/nix-$NIX_VERSION/install" -o /tmp/nix-install && \
+    echo "$NIX_INSTALLER_HASH  /tmp/nix-install" | sha256sum -c - && \
+    sh /tmp/nix-install --daemon --no-channel-add --yes --nix-extra-conf-file /tmp/extra-nix.conf && \
     rm /tmp/nix-install
 ENV PATH="${PATH}:/nix/var/nix/profiles/default/bin"
 RUN nix --version
@@ -48,7 +45,7 @@ COPY . .
 ####################
 FROM nix-base AS nix-builder-17
 
-RUN nix profile add path:.#psql_17_slim/bin path:.#pg-backrest path:.#pgctld
+RUN nix profile add path:.#psql_17_slim/bin path:.#pg-backrest path:.#pg-activity path:.#pgctld
 
 RUN nix store gc
 
@@ -63,7 +60,7 @@ RUN nix store gc
 ####################
 FROM nix-base AS nix-builder-orioledb-17
 
-RUN nix profile add path:.#psql_orioledb-17_slim/bin path:.#pg-backrest path:.#pgctld
+RUN nix profile add path:.#psql_orioledb-17_slim/bin path:.#pg-backrest path:.#pg-activity path:.#pgctld
 
 RUN nix store gc
 
@@ -74,34 +71,14 @@ RUN nix profile add path:.#supabase-groonga && \
 RUN nix store gc
 
 ####################
-# Stage 2: Gosu builder
-####################
-FROM alpine:3.23 AS gosu-builder
-
-ARG TARGETARCH
-ARG GOSU_VERSION=1.19
-ARG GO_VERSION=1.26.1
-
-RUN apk add --no-cache curl git
-
-# Install Go
-RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" | tar -C /usr/local -xz
-ENV PATH="/usr/local/go/bin:${PATH}"
-
-# Build gosu from source
-RUN git clone --depth 1 --branch "${GOSU_VERSION}" https://github.com/tianon/gosu.git /gosu && \
-    cd /gosu && \
-    CGO_ENABLED=0 go build -ldflags="-s -w" -o /usr/local/bin/gosu . && \
-    chmod +x /usr/local/bin/gosu
-
-####################
-# Stage 3: Shared base — runtime Alpine + config + migrations
+# Stage 2: Shared base — runtime Alpine + config + migrations
 # Both variants inherit from this stage. No /nix dependency here.
 ####################
 FROM alpine:3.23 AS base
 
 RUN apk add --no-cache \
     bash \
+    'ca-certificates-bundle>=20261020-r0' \
     curl \
     openssh \
     procps \
@@ -185,13 +162,12 @@ ENV LC_ALL=en_US.UTF-8
 ENV GRN_PLUGINS_DIR=/usr/lib/groonga/plugins
 
 ####################
-# Stage 4a: variant-17 — PostgreSQL 17 (vanilla)
+# Stage 3a: variant-17 — PostgreSQL 17 (vanilla)
 ####################
 FROM base AS variant-17
 
 COPY --from=nix-builder-17 /nix /nix
 COPY --from=nix-builder-17 /tmp/groonga-plugins/plugins /usr/lib/groonga/plugins
-COPY --from=gosu-builder /usr/local/bin/gosu /usr/local/bin/gosu
 
 RUN for f in /nix/var/nix/profiles/default/bin/*; do \
         ln -sf "$f" /usr/lib/postgresql/bin/ 2>/dev/null || true; \
@@ -216,13 +192,15 @@ ENV POSTGRES_CONFIG_TEMPLATE_PATH=/etc/pgctld-custom/postgresql.conf.tmpl
 # Strip extensions absent from pg17 vanilla build
 RUN sed -i 's/ timescaledb,//g; s/ plv8,//g' /etc/postgresql-custom/supautils.conf
 
+COPY --chown=postgres:postgres docker/pgctld/multigres-roles.sql /docker-entrypoint-initdb.d/multigres-roles.sql
+
 # Generate a single SQL manifest that pgctld runs via --init-db-sql-file after initdb.
-# Creates the postgres role, runs init-scripts as postgres (matching migrate.sh),
-# then runs migrations as supabase_admin.
+# Creates the postgres and multigres_probe roles (multigres-roles.sql), runs
+# init-scripts as postgres (matching migrate.sh), then runs migrations as supabase_admin.
 RUN set -e && \
     manifest=/docker-entrypoint-initdb.d/multigres-init.sql && \
     printf -- "-- Auto-generated: run init-scripts and migrations after initdb\n" > "$manifest" && \
-    printf "DO \$\$ BEGIN\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'postgres') THEN\n    CREATE ROLE postgres SUPERUSER LOGIN;\n  END IF;\nEND \$\$;\n" >> "$manifest" && \
+    printf '\\ir multigres-roles.sql\n' >> "$manifest" && \
     printf "ALTER DATABASE postgres OWNER TO postgres;\n\n" >> "$manifest" && \
     printf "SET SESSION AUTHORIZATION postgres;\n" >> "$manifest" && \
     for f in $(ls /docker-entrypoint-initdb.d/init-scripts/*.sql 2>/dev/null | sort); do \
@@ -248,13 +226,12 @@ ENTRYPOINT ["tail"]
 CMD ["-f", "/dev/null"]
 
 ####################
-# Stage 4b: variant-orioledb-17 — PostgreSQL 17 with OrioleDB
+# Stage 3b: variant-orioledb-17 — PostgreSQL 17 with OrioleDB
 ####################
 FROM base AS variant-orioledb-17
 
 COPY --from=nix-builder-orioledb-17 /nix /nix
 COPY --from=nix-builder-orioledb-17 /tmp/groonga-plugins/plugins /usr/lib/groonga/plugins
-COPY --from=gosu-builder /usr/local/bin/gosu /usr/local/bin/gosu
 
 RUN for f in /nix/var/nix/profiles/default/bin/*; do \
         ln -sf "$f" /usr/lib/postgresql/bin/ 2>/dev/null || true; \
@@ -271,14 +248,10 @@ RUN chown -R postgres:postgres /usr/lib/postgresql && \
 RUN sed -i 's/ timescaledb,//g; s/ plv8,//g; s/ postgis,//g; s/ pgrouting,//g' \
     /etc/postgresql-custom/supautils.conf
 
-# Add orioledb to shared_preload_libraries and configure as default table access method
-# Rewind: 1200s window, 100k transactions, 1280 x 8KB = 10MB buffer
-RUN sed -i "s/\(shared_preload_libraries.*\)'/\1, orioledb, pg_durable'/" /etc/postgresql/postgresql.conf && \
-    echo "default_table_access_method = 'orioledb'" >> /etc/postgresql/postgresql.conf && \
-    echo "orioledb.enable_rewind = true" >> /etc/postgresql/postgresql.conf && \
-    echo "orioledb.rewind_max_time = 1200" >> /etc/postgresql/postgresql.conf && \
-    echo "orioledb.rewind_max_transactions = 100000" >> /etc/postgresql/postgresql.conf && \
-    echo "orioledb.rewind_buffers = 1280" >> /etc/postgresql/postgresql.conf
+# OrioleDB configuration
+RUN sed -i /etc/postgresql/postgresql.conf \
+        -e "/shared_preload_libraries/ s|'|'orioledb,|" \
+        -e "$ a default_table_access_method = 'orioledb'"
 
 # Register orioledb before initdb migrations run
 RUN echo "CREATE EXTENSION orioledb;" > /docker-entrypoint-initdb.d/init-scripts/00-pre-init.sql && \
@@ -299,11 +272,13 @@ COPY docker/pgctld/orioledb-postgresql.conf.tmpl /etc/pgctld-custom/orioledb-pos
 COPY --chmod=755 docker/pgctld/pgctld-wrapper.sh /usr/local/bin/pgctld
 ENV POSTGRES_CONFIG_TEMPLATE_PATH=/etc/pgctld-custom/orioledb-postgresql.conf.tmpl
 
+COPY --chown=postgres:postgres docker/pgctld/multigres-roles.sql /docker-entrypoint-initdb.d/multigres-roles.sql
+
 # Regenerate manifest after orioledb added 00-pre-init.sql to init-scripts/
 RUN set -e && \
     manifest=/docker-entrypoint-initdb.d/multigres-init.sql && \
     printf -- "-- Auto-generated: run init-scripts and migrations after initdb\n" > "$manifest" && \
-    printf "DO \$\$ BEGIN\n  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'postgres') THEN\n    CREATE ROLE postgres SUPERUSER LOGIN;\n  END IF;\nEND \$\$;\n" >> "$manifest" && \
+    printf '\\ir multigres-roles.sql\n' >> "$manifest" && \
     printf "ALTER DATABASE postgres OWNER TO postgres;\n\n" >> "$manifest" && \
     printf "SET SESSION AUTHORIZATION postgres;\n" >> "$manifest" && \
     for f in $(ls /docker-entrypoint-initdb.d/init-scripts/*.sql 2>/dev/null | sort); do \

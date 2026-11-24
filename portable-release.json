@@ -1,0 +1,57 @@
+{
+  "has_work": true,
+  "release_tag": "postgres-17.12.0.005-cli",
+  "predecessor": null,
+  "upstream": {
+    "repository": "supabase/postgres",
+    "tag": "v17.12.0.005-cli",
+    "commit": "968515a0e6dc9370bcc877edd628423e3473f25f",
+    "url": "https://github.com/supabase/postgres/releases/tag/v17.12.0.005-cli",
+    "published_at": "2026-11-24T22:43:04Z"
+  },
+  "extensions": {
+    "pg_duckdb": {
+      "repository": "duckdb/pg_duckdb",
+      "tag": "v1.2.2",
+      "commit": "4e921ffbe4a16b3caec6cf24ca0151fa9d88032d",
+      "url": "https://github.com/duckdb/pg_duckdb/releases/tag/v1.2.2",
+      "published_at": "2026-11-23T14:09:36Z",
+      "version": "1.2.2",
+      "source": {
+        "url": "https://github.com/duckdb/pg_duckdb/archive/4e921ffbe4a16b3caec6cf24ca0151fa9d88032d.tar.gz",
+        "hash": "sha256-EhFwPzxmoHlL5W/WhrCyC1FG1nOPvtOJtf8cEaSBLk4="
+      },
+      "sql_version": "1.2.2",
+      "duckdb_commit": "8d78114e90a53823803660bf821f6073ac87da8c",
+      "httpfs_commit": "f71cfdb4bff85b9e15b1f3b842d9aa395aff0167",
+      "duckdb_source": {
+        "url": "https://github.com/duckdb/duckdb/archive/8d78114e90a53823803660bf821f6073ac87da8c.tar.gz",
+        "hash": "sha256-CbXHdXtBQn2jjwAdgPtRcm3v/pNnz/kqySIQ2Lvrfb4="
+      },
+      "httpfs_source": {
+        "url": "https://github.com/duckdb/duckdb-httpfs/archive/f71cfdb4bff85b9e15b1f3b842d9aa395aff0167.tar.gz",
+        "hash": "sha256-6jXqOLs0YNxsYDuMRn0GXp7L91beG+JlmMV8UmoO0j4="
+      }
+    },
+    "pg_durable": {
+      "repository": "microsoft/pg_durable",
+      "tag": "v0.2.9",
+      "commit": "2ccb746756e1071b24172b541f7af130166c0c6b",
+      "url": "https://github.com/microsoft/pg_durable/releases/tag/v0.2.9",
+      "published_at": "2026-10-07T11:23:22Z",
+      "version": "0.2.9",
+      "source": {
+        "url": "https://github.com/microsoft/pg_durable/releases/download/v0.2.9/pg_durable-0.2.9.tar.gz",
+        "hash": "sha256-bwTe3awgBPKFT8Uz/xRR5+hzHQoTIYQv97xyrBXWBwc="
+      },
+      "sql_version": "0.2.9",
+      "lock_source": {
+        "url": "https://raw.githubusercontent.com/microsoft/pg_durable/2ccb746756e1071b24172b541f7af130166c0c6b/Cargo.lock",
+        "hash": "sha256-2TlyaUKXudH910/w12CiRg3+6JL57/S225Y3nFWJraY="
+      },
+      "pgrx_version": "0.16.1",
+      "rust_version": "1.88.0"
+    }
+  },
+  "workflow_commit": "d7a17661e6f9ed89a71fa2c9b71c774406c3af16"
+}
