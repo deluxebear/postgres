@@ -37,6 +37,8 @@ start
 SET statement_timeout = '90s';
 CREATE EXTENSION pg_duckdb;
 CREATE EXTENSION pg_durable;
+CREATE ROLE portable_workflow_user LOGIN;
+SELECT df.grant_usage('portable_workflow_user');
 CREATE TABLE portable_probe (amount integer);
 INSERT INTO portable_probe VALUES (19), (23);
 SQL
@@ -63,6 +65,7 @@ done
 [[ "$ready" == true ]]
 "${psql[@]}" <<'SQL'
 SET statement_timeout = '90s';
+SET ROLE portable_workflow_user;
 SELECT df.start(df.sql('SELECT 42 AS answer'), 'portable-runtime-probe') AS instance_id \gset
 SELECT df.await_instance(:'instance_id');
 SELECT (df.result(:'instance_id')::jsonb->'rows'->0->>'answer' = '42') AS result_ok \gset

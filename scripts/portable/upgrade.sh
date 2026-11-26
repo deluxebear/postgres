@@ -29,12 +29,17 @@ pg_ctl -D "$data" -l "$data/server.log" -w start >/dev/null
 "${psql[@]}" <<'SQL'
 CREATE EXTENSION pg_duckdb;
 CREATE EXTENSION pg_durable;
+CREATE ROLE portable_workflow_user LOGIN;
+SELECT df.grant_usage('portable_workflow_user');
 CREATE TABLE upgrade_probe (amount int);
 INSERT INTO upgrade_probe VALUES (19), (23);
 SET statement_timeout = '90s';
 CREATE TABLE completed_workflow (id text);
+GRANT SELECT ON completed_workflow TO portable_workflow_user;
+SET ROLE portable_workflow_user;
 SELECT df.start(df.sql('SELECT 42 AS answer'), 'previous-portable-probe') AS instance_id \gset
 SELECT df.await_instance(:'instance_id');
+RESET ROLE;
 INSERT INTO completed_workflow VALUES (:'instance_id');
 SQL
 pg_ctl -D "$data" -m fast -w stop >/dev/null
@@ -45,9 +50,10 @@ ALTER EXTENSION pg_duckdb UPDATE;
 ALTER EXTENSION pg_durable UPDATE;
 SQL
 [[ $("${psql[@]}" -Atq -c 'SET duckdb.force_execution=true; SELECT sum(amount) FROM upgrade_probe') == 42 ]]
-[[ $("${psql[@]}" -At -c "SELECT df.result(id)::jsonb->'rows'->0->>'answer' FROM completed_workflow") == 42 ]]
+[[ $("${psql[@]}" -Atq -c "SET ROLE portable_workflow_user; SELECT df.result(id)::jsonb->'rows'->0->>'answer' FROM completed_workflow") == 42 ]]
 "${psql[@]}" <<'SQL'
 SET statement_timeout = '90s';
+SET ROLE portable_workflow_user;
 SELECT df.start(df.sql('SELECT 43 AS answer'), 'upgraded-portable-probe') AS instance_id \gset
 SELECT df.await_instance(:'instance_id');
 SELECT (df.result(:'instance_id')::jsonb->'rows'->0->>'answer' = '43') AS result_ok \gset

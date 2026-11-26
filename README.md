@@ -170,11 +170,16 @@ gh workflow run cli-release.yml --ref custom-extensions -f publish=true
 # 指定一个稳定 PG17 CLI release 进行构建验证
 gh workflow run cli-release.yml --ref custom-extensions \
   -f upstream_ref=v17.12.0.005-cli -f publish=false
+
+# 仅修改测试脚本时，复用某次运行已成功构建的三平台产物，避免重新编译
+# 此模式只验证，禁止发布，不改写原始产物及其来源记录
+gh workflow run cli-release.yml --ref custom-extensions \
+  -f artifact_run_id=<run-id> -f publish=false
 ```
 
 定时任务需要此 workflow 存在于仓库默认分支，并在 Actions 设置中启用。Linux 包以 Ubuntu 24.04 为无 Nix 验证环境，仍依赖宿主 glibc，不适用于原生 Alpine/musl。解压后可通过 `bin/initdb`、`bin/pg_ctl` 和 `bin/psql` 管理数据库；生产部署的用户、数据目录、认证、密钥管理及 systemd 服务需另行配置。
 
-此流程的验证统一在 GitHub Actions 上执行：源码准备任务运行发布逻辑单元测试和 Shell 静态检查，随后执行三个平台的原生构建与无 Nix 运行测试。开发时通过 `publish=false` 触发完整验证，不在本机进行构建或运行验证。
+此流程的验证统一在 GitHub Actions 上执行：源码准备任务运行发布逻辑单元测试和 Shell 静态检查，随后执行三个平台的原生构建与无 Nix 运行测试。运行测试通过后，即使 `publish=false` 也会核对三平台全部扩展版本、来源和 SHA-256，并生成可审阅的发布说明附件。开发时通过 `publish=false` 触发验证，不在本机进行构建或运行验证；仅调整验证脚本时可使用 `artifact_run_id` 对同一份已构建产物重测，该模式没有发布权限路径。
 
 ### Docker 镜像
 

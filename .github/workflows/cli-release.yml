@@ -15,9 +15,14 @@ on:
         description: "Publish after all three platforms pass (false always builds for validation)"
         type: boolean
         default: true
+      artifact_run_id:
+        description: "Validation only: reuse all three compiled artifacts from an earlier run (requires publish=false)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: custom-cli-release
@@ -26,6 +31,7 @@ concurrency:
 jobs:
   prepare:
     name: Discover stable releases and prepare source
+    if: github.event_name != 'workflow_dispatch' || inputs.artifact_run_id == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
@@ -206,10 +212,120 @@ jobs:
             bash scripts/portable/upgrade.sh relocated/* previous/*
           fi
 
+  validate-existing:
+    name: Retest ${{ matrix.arch }} without Nix
+    if: github.event_name == 'workflow_dispatch' && inputs.artifact_run_id != ''
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: darwin-arm64
+          - runner: ubuntu-24.04
+            arch: linux-x64
+          - runner: ubuntu-24.04-arm
+            arch: linux-arm64
+    steps:
+      - name: Checkout current validation scripts
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Validate reuse request and successful original build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_RUN: ${{ inputs.artifact_run_id }}
+          PUBLISH: ${{ inputs.publish }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          [[ "$PUBLISH" == false && "$SOURCE_RUN" =~ ^[0-9]+$ ]]
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" > original-run.json
+          jq -e --arg repo "$GH_REPO" '
+            .head_repository.full_name == $repo and .status == "completed"
+            and .path == ".github/workflows/cli-release.yml"
+            and (.event == "workflow_dispatch" or .event == "schedule")
+          ' original-run.json
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN/jobs?per_page=100" > original-jobs.json
+          jq -e --arg name "Build $ARCH" 'any(.jobs[]; .name == $name and .conclusion == "success")' original-jobs.json
+      - name: Validate automation scripts on Linux
+        if: runner.os == 'Linux'
+        run: |
+          python3 -m unittest discover -s tests -p test_portable_release.py
+          shellcheck scripts/portable/test.sh scripts/portable/upgrade.sh
+      - name: Download exact previously built archive
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: portable-binary-${{ matrix.arch }}
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+          path: dist
+      - name: Verify checksum and relocate unchanged binaries
+        run: |
+          set -euo pipefail
+          cd dist
+          if command -v sha256sum >/dev/null; then
+            sha256sum -c ./*.tar.gz.sha256
+          else
+            shasum -a 256 -c ./*.tar.gz.sha256
+          fi
+          mkdir ../relocated
+          tar -xzf ./*.tar.gz -C ../relocated
+      - name: Validate extension lifecycle without Nix
+        run: bash scripts/portable/test.sh relocated/*
+      - name: Validate real predecessor binary upgrade when available
+        run: |
+          set -euo pipefail
+          python3 scripts/portable/previous.py relocated/* previous
+          if [[ -d previous ]]; then
+            bash scripts/portable/upgrade.sh relocated/* previous/*
+          fi
+
+  verify-release:
+    name: Verify release inventory and notes
+    needs: [test-portability, validate-existing]
+    if: always() && (needs.test-portability.result == 'success' || needs.validate-existing.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout release validation scripts
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Download source provenance
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: portable-source
+          run-id: ${{ inputs.artifact_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+          path: prepared
+      - name: Download platform inventories and archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: portable-binary-*
+          run-id: ${{ inputs.artifact_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: artifacts
+      - name: Validate all actual extension versions and source records
+        run: |
+          python3 scripts/portable/release.py notes --plan prepared/plan.json \
+            --artifacts artifacts --output release-notes.md
+          cd artifacts
+          sha256sum -c ./*.tar.gz.sha256
+      - name: Upload reviewable release notes
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: portable-release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
   publish:
     name: Publish portable GitHub release
-    needs: [prepare, test-portability]
-    if: github.event_name == 'schedule' || inputs.publish
+    needs: [prepare, verify-release]
+    if: github.event_name == 'schedule' || (inputs.publish && inputs.artifact_run_id == '')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

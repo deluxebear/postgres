@@ -282,6 +282,9 @@ def patch_checkout(plan, checkout):
         destination = checkout / "scripts/portable" / filename
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / "scripts/portable" / filename, destination)
+    tests = checkout / "tests/test_portable_release.py"
+    tests.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / "tests/test_portable_release.py", tests)
     (checkout / "portable-release.json").write_text(json.dumps(plan, indent=2) + "\n")
 
 
