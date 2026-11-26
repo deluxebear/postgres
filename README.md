@@ -148,6 +148,43 @@ docker/pgctld/orioledb-postgresql.conf.tmpl
 
 ## 构建方式
 
+### 便携二进制包（无需 Docker / Nix）
+
+`.github/workflows/cli-release.yml` 基于上游 `v17.12.0.005-cli` 的 CLI Release 流程改造，独立于下方 Docker 发布流程。每 6 小时检查 Supabase 最新稳定 PG17 `*-cli` release；排除 draft、prerelease、test、RC、preview 等版本，已发布的上游版本直接跳过。只有出现新的上游 CLI release 时才自动构建，扩展单独发布新版不会触发重发。
+
+每次构建都从官方 GitHub Releases 解析 `pg_duckdb` 和 `pg_durable` 的最新稳定版本，固定 release tag、commit、源码 SHA-256、DuckDB/httpfs 子模块及 Cargo.lock。动态版本只写入当次上游源码快照，不修改当前 Docker/Nix 包的版本固定值。如果上游构建布局、PostgreSQL 支持或 pgrx/Rust 工具链不兼容，任务失败并停止发布，不退回旧扩展版本。新增 pgrx/Rust 组合需要先在项目的 `nix/cargo-pgrx/versions.json` 中维护并验证支持。
+
+沿用上游的三个原生构建目标：Linux x64、Linux ARM64、macOS ARM64（使用当前支持的 `macos-15` runner）。保留 CLI 精简扩展，并加入 `pg_duckdb` 和 `pg_durable`；配置模板保留已有预加载库并追加这两个库。打包后在独立的无 `/nix/store` runner 上验证重定位、初始化、扩展安装、DuckDB 查询与 httpfs 加载、durable 工作流执行、重启、dump/restore 和 pg_duckdb 随包可安装的前序 SQL 版本升级。已有定制便携版 release 时，还会下载并校验对应平台的前版包，用真实旧二进制创建数据和执行 durable 工作流，再切换新二进制升级两个扩展，验证数据、已完成结果及新工作流；首次发布没有前版包时明确记录未执行该项。不保证升级时仍在运行的 durable 工作流能够跨版本回放。
+
+发布 tag 示例为 `postgres-17.12.0.005-cli`，指向实际构建的定制上游源码快照；不覆盖已有 tag 或完成的 release。全部平台通过后才上传草稿并正式发布。附件包括各平台 `.tar.gz`、`.sha256` 和 `.extensions.json`；包内的 `portable-release.json` 记录源码和依赖哈希。Release 说明包含两个定制扩展的版本、官方 release 链接，以及从实际 `.control` 文件提取的全部随包 SQL 扩展默认版本。三平台扩展版本或来源不一致时停止发布。
+
+可手动验证或发布：
+
+```bash
+# 只构建和测试，不推送 tag 或发布；即使已有 release 也会执行验证
+gh workflow run cli-release.yml --ref custom-extensions -f publish=false
+
+# 发布最新稳定上游版本（已发布则跳过）
+gh workflow run cli-release.yml --ref custom-extensions -f publish=true
+
+# 指定一个稳定 PG17 CLI release 进行构建验证
+gh workflow run cli-release.yml --ref custom-extensions \
+  -f upstream_ref=v17.12.0.005-cli -f publish=false
+
+# 仅修改测试脚本时，复用某次运行已成功构建的三平台产物，避免重新编译
+# 此模式只验证，禁止发布，不改写原始产物及其来源记录
+gh workflow run cli-release.yml --ref custom-extensions \
+  -f artifact_run_id=<run-id> -f publish=false
+```
+
+定时任务需要此 workflow 存在于仓库默认分支，并在 Actions 设置中启用。Linux 包以 Ubuntu 24.04 为无 Nix 验证环境，仍依赖宿主 glibc，不适用于原生 Alpine/musl。解压后可通过 `bin/initdb`、`bin/pg_ctl` 和 `bin/psql` 管理数据库；生产部署的用户、数据目录、认证、密钥管理及 systemd 服务需另行配置。
+
+此流程的验证统一在 GitHub Actions 上执行：源码准备任务运行发布逻辑单元测试和 Shell 静态检查，随后执行三个平台的原生构建与无 Nix 运行测试。运行测试通过后，即使 `publish=false` 也会核对三平台全部扩展版本、来源和 SHA-256，并生成可审阅的发布说明附件。开发时通过 `publish=false` 触发验证，不在本机进行构建或运行验证；仅调整验证脚本时可使用 `artifact_run_id` 对同一份已构建产物重测，该模式没有发布权限路径。
+
+其中逻辑 dump/restore 检查针对独立数据库中的 pg_duckdb 与用户表；pg_durable 检查工作流执行及重启后已完成结果保留。未验证 durable 控制数据库的逻辑备份恢复，不应将控制数据库直接用通用 pg_restore 复制为卫星数据库。
+
+### Docker 镜像
+
 核心 Action：
 
 ```text
