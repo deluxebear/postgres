@@ -11,6 +11,9 @@
 
 ### 当前版本说明
 
+- 2026-11-26 已将 pg_duckdb 1.2.2 升级及上游 Nix 打包接口修复合并到默认分支 `custom-extensions`，并通过 [完整发布工作流](https://github.com/deluxebear/postgres/actions/runs/45824804647) 发布标准版 [17.12.0.005](https://github.com/deluxebear/postgres/releases/tag/postgres-17.12.0.005) 和 [17.11.0.024-orioledb](https://github.com/deluxebear/postgres/releases/tag/postgres-17.11.0.024-orioledb)。四个原生架构任务均完成 Nix 构建、安装及升级测试、Docker 构建推送，两组多架构 manifest 和 GitHub Release 均发布成功。标准版包含 pg_duckdb `1.2.2`，两类镜像均包含 pg_durable `0.2.9`，浮动标签 `17`、`orioledb-17` 已更新。
+- 标准版 manifest 为 `sha256:df97707e94993d732579615d6f1a3434bee1e50a72e2e7ffa94c91f12a16da57`，OrioleDB 版为 `sha256:57ce940cc01d291f680821ac69f37f3743fc6ec6faeba965b3126255831ef4bd`。发布源码提交分别为 `ff0ce61269609e82ad26a9933294cabe29deb7c8` 和 `b5386ca7b37e41201a83a60c026a19a05b994a42`，标签指向叠加定制补丁的上游源码快照。
+
 - `pg_durable 0.2.9` 是官方 GitHub 于 2026-10-07 发布的最新稳定版本，release 见 [v0.2.9](https://github.com/microsoft/pg_durable/releases/tag/v0.2.9)。上游源码继续使用 pgrx `0.16.1`，保留 `pg17` 构建特性，并提供 `pg_durable--0.2.8--0.2.9.sql` 升级路径。源码包和 `Cargo.lock` 均固定到该 release 并校验 SHA-256。
 - `0.2.9` 新增共享控制运行时的多数据库安装、`df.with_http_options`、HTTP 端点和显式 secret 绑定，并加强内部 SQL 的名称解析。HTTP 策略从 Cargo 特性迁移到需要重启的 `pg_durable.http_security` 参数，默认 `restricted`；通过 `pg_durable.http_allowed_domains` 配置域名。原有 `http-allow-azure-domains` 构建特性已移除，本仓库使用上游默认的 Azure 服务子域和 `api.github.com` 白名单。
 - 从 `0.2.8` 升级时，先安装新二进制并重启，等待控制运行时就绪，再执行 `ALTER EXTENSION pg_durable UPDATE TO '0.2.9'`，之后创建卫星数据库安装。为已有 HTTP 用户启用新增的端点接口时，重新调用 `df.grant_usage('角色名', include_http => true)`。此前禁用 HTTP 的部署应在重启前设置 `pg_durable.http_security = 'disabled'`。详见上游 [升级指南](https://github.com/microsoft/pg_durable/blob/v0.2.9/docs/upgrade-testing.md#v028--v029)。
@@ -144,6 +147,43 @@ docker/pgctld/orioledb-postgresql.conf.tmpl
 ```
 
 ## 构建方式
+
+### 便携二进制包（无需 Docker / Nix）
+
+`.github/workflows/cli-release.yml` 基于上游 `v17.12.0.005-cli` 的 CLI Release 流程改造，独立于下方 Docker 发布流程。每 6 小时检查 Supabase 最新稳定 PG17 `*-cli` release；排除 draft、prerelease、test、RC、preview 等版本，已发布的上游版本直接跳过。只有出现新的上游 CLI release 时才自动构建，扩展单独发布新版不会触发重发。
+
+每次构建都从官方 GitHub Releases 解析 `pg_duckdb` 和 `pg_durable` 的最新稳定版本，固定 release tag、commit、源码 SHA-256、DuckDB/httpfs 子模块及 Cargo.lock。动态版本只写入当次上游源码快照，不修改当前 Docker/Nix 包的版本固定值。如果上游构建布局、PostgreSQL 支持或 pgrx/Rust 工具链不兼容，任务失败并停止发布，不退回旧扩展版本。新增 pgrx/Rust 组合需要先在项目的 `nix/cargo-pgrx/versions.json` 中维护并验证支持。
+
+沿用上游的三个原生构建目标：Linux x64、Linux ARM64、macOS ARM64。保留 CLI 精简扩展，并加入 `pg_duckdb` 和 `pg_durable`；配置模板保留已有预加载库并追加这两个库。打包后在独立的无 `/nix/store` runner 上验证重定位、初始化、扩展安装、DuckDB 查询与 httpfs 加载、durable 工作流执行、重启、dump/restore 和随包可安装的前序 SQL 版本升级。SQL 升级测试使用新版二进制，不代表旧二进制或运行中 durable 工作流的跨版本回放验证。
+
+发布 tag 示例为 `postgres-17.12.0.005-cli`，指向实际构建的定制上游源码快照；不覆盖已有 tag 或完成的 release。全部平台通过后才上传草稿并正式发布。附件包括各平台 `.tar.gz`、`.sha256` 和 `.extensions.json`；包内的 `portable-release.json` 记录源码和依赖哈希。Release 说明包含两个定制扩展的版本、官方 release 链接，以及从实际 `.control` 文件提取的全部随包 SQL 扩展默认版本。三平台扩展版本或来源不一致时停止发布。
+
+可手动验证或发布：
+
+```bash
+# 只构建和测试，不推送 tag 或发布；即使已有 release 也会执行验证
+gh workflow run cli-release.yml --ref custom-extensions -f publish=false
+
+# 发布最新稳定上游版本（已发布则跳过）
+gh workflow run cli-release.yml --ref custom-extensions -f publish=true
+
+# 指定一个稳定 PG17 CLI release 进行构建验证
+gh workflow run cli-release.yml --ref custom-extensions \
+  -f upstream_ref=v17.12.0.005-cli -f publish=false
+```
+
+定时任务需要此 workflow 存在于仓库默认分支，并在 Actions 设置中启用。Linux 包以 Ubuntu 24.04 为无 Nix 验证环境，仍依赖宿主 glibc，不适用于原生 Alpine/musl。解压后可通过 `bin/initdb`、`bin/pg_ctl` 和 `bin/psql` 管理数据库；生产部署的用户、数据目录、认证、密钥管理及 systemd 服务需另行配置。
+
+发布自动化的本地检查：
+
+```bash
+python3 -m unittest discover -s tests -p test_portable_release.py
+actionlint .github/workflows/cli-release.yml
+shellcheck scripts/portable/test.sh
+git diff --check
+```
+
+### Docker 镜像
 
 核心 Action：
 
