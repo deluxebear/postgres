@@ -144,6 +144,7 @@
             // {
               inherit postgresql latestOnly;
               inherit (self'.packages) supabase-groonga mecab-naist-jdic;
+              rust-bin = inputs.rust-overlay.lib.mkRustBin { } pkgs;
               switch-ext-version = extCallPackage ./switch-ext-version.nix { };
               overlayfs-on-package = extCallPackage ./overlayfs-on-package.nix { };
             }
