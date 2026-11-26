@@ -1,21 +1,96 @@
-name: CLI Release
+# Adapted from supabase/postgres CLI Release at v17.12.0.005-cli.
+# Keep the upstream native build -> no-Nix test -> publish structure.
+name: CLI Release with custom extensions
 
 on:
-  push:
-    tags:
-      - "v*-cli"
-  pull_request:
+  schedule:
+    - cron: "17 */6 * * *"
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version tag (e.g., v1.0.0-cli)"
-        required: true
+      upstream_ref:
+        description: "Optional stable PG17 CLI release tag; empty tracks the latest"
         type: string
+        default: ""
+      publish:
+        description: "Publish after all three platforms pass (false always builds for validation)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-cli-release
+  cancel-in-progress: false
 
 jobs:
+  prepare:
+    name: Discover stable releases and prepare source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      has_work: ${{ steps.discover.outputs.has_work }}
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          path: .workflow
+          persist-credentials: false
+      - name: Validate release automation
+        working-directory: .workflow
+        run: |
+          python3 -m unittest discover -s tests -p test_portable_release.py
+          shellcheck scripts/portable/test.sh
+          bash -n scripts/portable/test.sh
+      - name: Discover latest stable upstream and extension releases
+        id: discover
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          UPSTREAM_REF: ${{ inputs.upstream_ref }}
+          BUILD_ONLY: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish }}
+        run: |
+          set -euo pipefail
+          args=(--repository "$GH_REPO" --output discovery.json)
+          if [[ -n "$UPSTREAM_REF" ]]; then args+=(--upstream-ref "$UPSTREAM_REF"); fi
+          if [[ "$BUILD_ONLY" == true ]]; then args+=(--force); fi
+          python3 .workflow/scripts/portable/release.py discover "${args[@]}"
+          if [[ $(jq -r .has_work discovery.json) == true ]]; then
+            echo "upstream_sha=$(jq -r .upstream.commit discovery.json)" >> "$GITHUB_OUTPUT"
+          else
+            echo 'No new stable PG17 CLI release requires publishing.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Checkout exact upstream release source
+        if: steps.discover.outputs.has_work == 'true'
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          repository: supabase/postgres
+          ref: ${{ steps.discover.outputs.upstream_sha }}
+          path: upstream
+          persist-credentials: false
+      - name: Pin sources and add custom extensions to upstream portable build
+        if: steps.discover.outputs.has_work == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .workflow/scripts/portable/release.py prepare \
+            --plan discovery.json --checkout upstream --output prepared
+          jq '{upstream, extensions, source_commit}' prepared/plan.json >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload immutable prepared source
+        if: steps.discover.outputs.has_work == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: portable-source
+          path: prepared/
+          if-no-files-found: error
+          retention-days: 30
+
   build-native:
     name: Build ${{ matrix.arch }}
+    needs: prepare
+    if: needs.prepare.outputs.has_work == 'true'
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
@@ -24,437 +99,164 @@ jobs:
             runner: macos-14
             arch: darwin-arm64
           - system: x86_64-linux
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             arch: linux-x64
           - system: aarch64-linux
             runner: ubuntu-24.04-arm
             arch: linux-arm64
     steps:
-      - name: Checkout repository
-        uses: supabase/postgres/.github/actions/shared-checkout@HEAD
-
+      - name: Checkout workflow repository
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          path: .workflow
+          persist-credentials: false
+      - name: Download prepared source
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: portable-source
+          path: prepared
+      - name: Extract exact build source
+        run: |
+          mkdir upstream
+          tar -xzf prepared/source.tar.gz -C upstream
+          # Flakes in a non-git directory include the resolved pins and manifest.
       - name: Install Nix
-        uses: ./.github/actions/nix-install-ephemeral
-
-      - name: Run portability check
-        uses: ./.github/actions/nix-build-retry
-        with:
-          attr: .#checks.${{ matrix.system }}.psql_17_cli_portable
-          extra-args: --system ${{ matrix.system }}
-
+        uses: ./.workflow/.github/actions/nix-install-ephemeral
       - name: Build portable CLI bundle
-        uses: ./.github/actions/nix-build-retry
+        uses: ./.workflow/.github/actions/nix-build-retry
         with:
-          attr: .#psql_17_cli_portable
+          attr: path:./upstream#psql_17_cli_portable
           extra-args: --system ${{ matrix.system }}
-
-      - name: Determine version
-        id: version
+      - name: Run upstream portability check
+        uses: ./.workflow/.github/actions/nix-build-retry
+        with:
+          attr: path:./upstream#checks.${{ matrix.system }}.psql_17_cli_portable
+          extra-args: --no-link --system ${{ matrix.system }}
+      - name: Package bundle and actual extension versions
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
+          set -euo pipefail
+          tag=$(jq -r .release_tag prepared/plan.json)
+          name="supabase-${tag}-${ARCH}"
+          mkdir -p "staging/$name" dist
+          cp -RL result/. "staging/$name/"
+          chmod -R u+w "staging/$name"
+          python3 upstream/scripts/portable/inventory.py "staging/$name" "$ARCH"
+          cp "staging/$name/extensions.json" "dist/$name.extensions.json"
+          tar -czf "dist/$name.tar.gz" -C staging "$name"
+          cd dist
+          if command -v sha256sum >/dev/null; then
+            sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
           else
-            VERSION="${{ github.ref_name }}"
+            shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
           fi
-          # Sanitize version by replacing slashes with dashes
-          VERSION="${VERSION//\//-}"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare build directory
-        run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          ARCH="${{ matrix.arch }}"
-          BUILD_DIR="supabase-postgres-${VERSION}-${ARCH}"
-
-          mkdir -p "${BUILD_DIR}"
-          shopt -s dotglob
-          cp -rL result/* "${BUILD_DIR}/"
-          shopt -u dotglob
-
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: supabase-postgres-${{ matrix.arch }}
-          path: supabase-postgres-${{ steps.version.outputs.version }}-${{ matrix.arch }}
-          retention-days: 90
-          include-hidden-files: true
+          name: portable-binary-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
 
   test-portability:
-    name: ${{ matrix.arch }} without Nix
-    needs: [build-native]
+    name: Test ${{ matrix.arch }} without Nix
+    needs: build-native
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: macos-14
             arch: darwin-arm64
-          - runner: ubuntu-latest
+          - runner: ubuntu-24.04
             arch: linux-x64
           - runner: ubuntu-24.04-arm
             arch: linux-arm64
     steps:
-      - name: Download artifact
+      - name: Checkout validation scripts
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Download portable archive
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: supabase-postgres-${{ matrix.arch }}
-          path: .
-
-      - name: Test binaries work without Nix
+          name: portable-binary-${{ matrix.arch }}
+          path: dist
+      - name: Verify checksum and relocate bundle
         run: |
-          cd bin
-          find . -maxdepth 1 -type f -exec chmod +x {} +
-          ls -la
-
-          echo "Testing postgres --version..."
-          ./postgres --version
-
-          echo "Testing pg_config --version..."
-          ./pg_config --version
-
-          echo "Testing psql --version..."
-          ./psql --version
-
-          echo "Testing initdb --version..."
-          ./initdb --version
-
-      - name: Test initialization script
-        run: |
-          set -e
-
-          echo "=========================================="
-          echo "Testing supabase-postgres-init.sh"
-          echo "=========================================="
-
-          # Make init script executable
-          chmod +x ./share/supabase-cli/bin/supabase-postgres-init.sh
-
-          # Test 1: Initialize database with init script
-          export PGDATA="$(pwd)/pgdata-init-test"
-          export POSTGRES_USER="test_user"
-          export POSTGRES_PASSWORD="test_password"
-          export POSTGRES_DB="test_db"
-
-          echo "Starting PostgreSQL with init script..."
-          ./share/supabase-cli/bin/supabase-postgres-init.sh -p 54321 > init.log 2>&1 &
-          INIT_PID=$!
-
-          # Wait for PostgreSQL to be ready
-          for i in {1..30}; do
-            if ./bin/pg_isready -p 54321 -h 127.0.0.1 -U test_user > /dev/null 2>&1; then
-              echo "PostgreSQL is ready"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "PostgreSQL failed to start"
-              cat init.log
-              exit 1
-            fi
-            sleep 1
-          done
-
-          echo ""
-          echo "=========================================="
-          echo "Testing password authentication"
-          echo "=========================================="
-
-          # Test password authentication (should work with scram-sha-256)
-          PGPASSWORD="test_password" ./bin/psql -p 54321 -h 127.0.0.1 -U test_user -d test_db -c "SELECT version();" > /dev/null
-          if [ $? -eq 0 ]; then
-            echo "✓ Password authentication successful"
+          set -euo pipefail
+          cd dist
+          if command -v sha256sum >/dev/null; then
+            sha256sum -c ./*.tar.gz.sha256
           else
-            echo "✗ Password authentication failed"
-            exit 1
+            shasum -a 256 -c ./*.tar.gz.sha256
           fi
+          mkdir ../relocated
+          tar -xzf ./*.tar.gz -C ../relocated
+      - name: Validate extension installation, execution, upgrade, restart and restore
+        run: bash scripts/portable/test.sh relocated/*
 
-          # Test wrong password (should fail) - temporarily disable set -e
-          set +e
-          PGPASSWORD="wrong_password" ./bin/psql -p 54321 -h 127.0.0.1 -U test_user -d test_db -c "SELECT 1;" > /dev/null 2>&1
-          WRONG_PW_STATUS=$?
-          set -e
-          if [ $WRONG_PW_STATUS -ne 0 ]; then
-            echo "✓ Wrong password correctly rejected"
-          else
-            echo "✗ Wrong password was accepted (security issue!)"
-            exit 1
-          fi
-
-          echo ""
-          echo "=========================================="
-          echo "Testing database initialization"
-          echo "=========================================="
-
-          # Verify database exists
-          PGPASSWORD="test_password" ./bin/psql -p 54321 -h 127.0.0.1 -U test_user -d test_db -v ON_ERROR_STOP=1 -c "SELECT current_database();" | grep "test_db"
-          if [ $? -eq 0 ]; then
-            echo "✓ Custom database created"
-          else
-            echo "✗ Custom database not found"
-            exit 1
-          fi
-
-          # Verify configuration files were set up
-          if [ -f "$PGDATA/postgresql.conf" ] && [ -f "$PGDATA/pg_hba.conf" ]; then
-            echo "✓ Configuration files created"
-          else
-            echo "✗ Configuration files missing"
-            exit 1
-          fi
-
-          # Verify pgsodium/vault getkey scripts are configured
-          if grep -q "pgsodium.getkey_script" "$PGDATA/postgresql.conf" && grep -q "vault.getkey_script" "$PGDATA/postgresql.conf"; then
-            echo "✓ Getkey scripts configured"
-          else
-            echo "✗ Getkey scripts not configured"
-            exit 1
-          fi
-
-          echo ""
-          echo "=========================================="
-          echo "Testing idempotency"
-          echo "=========================================="
-
-          # Stop PostgreSQL
-          ./bin/pg_ctl -D "$PGDATA" stop -m fast
-          wait $INIT_PID 2>/dev/null || true
-
-          # Run init script again (should skip initialization)
-          ./share/supabase-cli/bin/supabase-postgres-init.sh -p 54321 > init2.log 2>&1 &
-          INIT_PID2=$!
-
-          # Wait for PostgreSQL to be ready
-          for i in {1..30}; do
-            if ./bin/pg_isready -p 54321 -h 127.0.0.1 -U test_user > /dev/null 2>&1; then
-              echo "PostgreSQL is ready after re-init"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "PostgreSQL failed to start on second run"
-              cat init2.log
-              exit 1
-            fi
-            sleep 1
-          done
-
-          # Verify we can still connect with same password
-          PGPASSWORD="test_password" ./bin/psql -p 54321 -h 127.0.0.1 -U test_user -d test_db -c "SELECT 1;" > /dev/null
-          if [ $? -eq 0 ]; then
-            echo "✓ Idempotency verified - database not re-initialized"
-          else
-            echo "✗ Failed to connect after re-running init script"
-            exit 1
-          fi
-
-          # Check log to verify it skipped initialization
-          if grep -q "already initialized" init2.log; then
-            echo "✓ Init script correctly detected existing database"
-          else
-            echo "⚠ Warning: Init script may have re-initialized (check init2.log)"
-          fi
-
-          # Stop PostgreSQL
-          ./bin/pg_ctl -D "$PGDATA" stop -m fast
-          wait $INIT_PID2 2>/dev/null || true
-
-          echo ""
-          echo "=========================================="
-          echo "Init script tests completed successfully"
-          echo "=========================================="
-          echo ""
-
-      - name: Test migrations with CLI variant
-        run: |
-          set -e
-
-          # Use bundled pgsodium getkey script
-          GETKEY_SCRIPT="$(pwd)/share/supabase-cli/config/pgsodium_getkey.sh"
-          chmod +x "$GETKEY_SCRIPT"
-
-          # Initialize test database
-          PGDATA="$(pwd)/pgdata-test"
-          ./bin/initdb -D "$PGDATA" -U supabase_admin --no-instructions
-
-          # Copy CLI config and add pgsodium/vault getkey scripts
-          cp share/supabase-cli/config/postgresql.conf.template "$PGDATA/postgresql.conf"
-          cat >> "$PGDATA/postgresql.conf" << EOF
-
-          # pgsodium and vault configuration for testing
-          pgsodium.getkey_script = '$GETKEY_SCRIPT'
-          vault.getkey_script = '$GETKEY_SCRIPT'
-          EOF
-
-          # Start PostgreSQL
-          ./bin/postgres -D "$PGDATA" -p 54322 > postgres.log 2>&1 &
-          PG_PID=$!
-
-          # Wait for PostgreSQL to be ready
-          for i in {1..30}; do
-            if ./bin/pg_isready -p 54322 -h 127.0.0.1 -U supabase_admin > /dev/null 2>&1; then
-              echo "PostgreSQL is ready"
-              break
-            fi
-            if [ $i -eq 30 ]; then
-              echo "PostgreSQL failed to start"
-              cat postgres.log
-              exit 1
-            fi
-            sleep 1
-          done
-
-          # Run migrations
-          cd share/supabase-cli/migrations
-          chmod +x migrate.sh
-          echo "=========================================="
-          echo "Running migrations..."
-          echo "=========================================="
-          PATH="$(pwd)/../../../bin:$PATH" \
-          POSTGRES_PASSWORD=postgres \
-          POSTGRES_PORT=54322 \
-          POSTGRES_DB=postgres \
-          POSTGRES_USER=supabase_admin \
-          ./migrate.sh 2>&1 | tee migration.log
-          MIGRATION_STATUS=${PIPESTATUS[0]}
-
-          echo ""
-          echo "=========================================="
-          echo "Migration output complete"
-          echo "=========================================="
-
-          # Check migration results - all migrations must succeed
-          if [ $MIGRATION_STATUS -ne 0 ]; then
-            echo "Migrations failed"
-            cat migration.log
-            exit 1
-          fi
-
-          echo "All migrations applied successfully"
-
-          # Verify extensions are installed
-          cd ../../..
-          ./bin/psql -p 54322 -h 127.0.0.1 -U supabase_admin -d postgres -v ON_ERROR_STOP=1 -c "\dx" | tee extensions.log
-
-          # Check for required extensions
-          for ext in pgcrypto uuid-ossp supabase_vault; do
-            if ! grep -q "$ext" extensions.log; then
-              echo "Required extension $ext not found"
-              exit 1
-            fi
-          done
-
-          echo ""
-          echo "=========================================="
-          echo "Testing timezone functionality with bundled timezone data"
-          echo "=========================================="
-
-          cat > timezone_test.sql << 'EOF'
-          -- Test basic timezone conversion
-          SELECT now() AT TIME ZONE 'America/New_York' AS ny_time;
-          SELECT now() AT TIME ZONE 'Europe/London' AS london_time;
-          SELECT now() AT TIME ZONE 'Asia/Tokyo' AS tokyo_time;
-
-          -- Verify timezone database is accessible
-          SELECT COUNT(*) AS timezone_count FROM pg_timezone_names;
-
-          -- Test that we have reasonable number of timezones (should be 500+)
-          DO $$
-          DECLARE
-            tz_count INTEGER;
-          BEGIN
-            SELECT COUNT(*) INTO tz_count FROM pg_timezone_names;
-            IF tz_count < 500 THEN
-              RAISE EXCEPTION 'Insufficient timezones: found %, expected 500+', tz_count;
-            END IF;
-            RAISE NOTICE 'Timezone test passed: found % timezones', tz_count;
-          END $$;
-
-          -- Show current timezone setting
-          SHOW timezone;
-          EOF
-
-          # Run timezone tests from file
-          ./bin/psql -p 54322 -h 127.0.0.1 -U supabase_admin -d postgres -v ON_ERROR_STOP=1 -f timezone_test.sql | tee timezone.log
-          TIMEZONE_STATUS=${PIPESTATUS[0]}
-
-          if [ $TIMEZONE_STATUS -ne 0 ]; then
-            echo "Timezone tests failed"
-            cat timezone.log
-            exit 1
-          fi
-
-          echo "Timezone tests passed successfully"
-          echo ""
-
-          # Stop PostgreSQL
-          ./bin/pg_ctl -D "$PGDATA" stop -m fast
-
-          echo "Migration test completed successfully"
-
-  release:
-    name: Create GitHub Release
-    needs: [build-native, test-portability]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+  publish:
+    name: Publish portable GitHub release
+    needs: [prepare, test-portability]
+    if: github.event_name == 'schedule' || inputs.publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
-      - name: Download all artifacts
+      - name: Checkout workflow repository
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Download prepared source
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          path: artifacts
-
-      - name: Prepare release assets
-        run: |
-          mkdir -p release temp
-
-          # Determine version
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="${{ github.ref_name }}"
-          fi
-          VERSION="${VERSION//\//-}"
-
-          # Create tarballs from each artifact directory
-          for dir in artifacts/*; do
-            if [ -d "$dir" ]; then
-              ARTIFACT_NAME=$(basename "$dir")
-              # Extract arch from artifact name (e.g., "supabase-postgres-darwin-arm64" -> "darwin-arm64")
-              ARCH="${ARTIFACT_NAME#supabase-postgres-}"
-              BUILD_DIR="supabase-postgres-${VERSION}-${ARCH}"
-
-              echo "Creating tarball for ${BUILD_DIR}..."
-
-              # Create temp directory with proper structure
-              mkdir -p "temp/${BUILD_DIR}"
-              cp -r "$dir"/* "temp/${BUILD_DIR}/"
-
-              # Create tarball with directory structure
-              tar -czhf "release/${BUILD_DIR}.tar.gz" -C temp "${BUILD_DIR}"
-
-              # Generate checksum
-              sha256sum "release/${BUILD_DIR}.tar.gz" > "release/${BUILD_DIR}.tar.gz.sha256"
-
-              # Cleanup temp directory for this artifact
-              rm -rf "temp/${BUILD_DIR}"
-
-              echo "✓ Created release/${BUILD_DIR}.tar.gz"
-            fi
-          done
-
-          ls -lh release/
-
-      - name: Determine release tag
-        id: release_tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create Release
-        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+          name: portable-source
+          path: prepared
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          tag_name: ${{ steps.release_tag.outputs.tag }}
-          files: release/*
-          generate_release_notes: true
+          pattern: portable-binary-*
+          merge-multiple: true
+          path: artifacts
+      - name: Validate inventories and generate release notes
+        run: |
+          python3 scripts/portable/release.py notes --plan prepared/plan.json \
+            --artifacts artifacts --output release-notes.md
+          cd artifacts
+          sha256sum -c ./*.tar.gz.sha256
+      - name: Push immutable source tag and publish verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag=$(jq -r .release_tag prepared/plan.json)
+          source_sha=$(jq -r .source_commit prepared/plan.json)
+          git fetch prepared/source.bundle refs/heads/portable-source
+          test "$(git rev-parse FETCH_HEAD)" = "$source_sha"
+          git diff --exit-code "$GITHUB_SHA" "$source_sha" -- .github/workflows
+          # Never rewrite an existing tag or a completed release.
+          if gh api "repos/$GH_REPO/git/ref/tags/$tag" > existing-tag.json 2> tag-error.log; then
+            test "$(jq -r .object.sha existing-tag.json)" = "$source_sha"
+          elif ! grep -q 'HTTP 404' tag-error.log; then
+            cat tag-error.log >&2; exit 1
+          else
+            gh auth setup-git --hostname github.com
+            git push "https://github.com/$GH_REPO.git" "$source_sha:refs/tags/$tag"
+          fi
+          if gh release view "$tag" --json isDraft --jq .isDraft > draft.txt 2> release-error.log; then
+            test "$(cat draft.txt)" = true
+            gh release edit "$tag" --notes-file release-notes.md
+          elif grep -qi 'release not found' release-error.log; then
+            gh release create "$tag" --verify-tag --draft --latest=false \
+              --title "PostgreSQL ${tag#postgres-} portable" --notes-file release-notes.md
+          else
+            cat release-error.log >&2; exit 1
+          fi
+          gh release upload "$tag" artifacts/*.tar.gz artifacts/*.sha256 artifacts/*.extensions.json --clobber
+          gh release edit "$tag" --draft=false --latest=false
+          gh release view "$tag" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
