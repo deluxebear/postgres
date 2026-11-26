@@ -30,7 +30,7 @@ else
   cat release-error.log >&2; exit 1
 fi
 gh release upload "$tag" artifacts/*.tar.gz artifacts/*.sha256 artifacts/*.extensions.json --clobber
-gh release edit "$tag" --draft=false --latest=false
+gh release edit "$tag" --draft=false --latest
 # Check the published asset bytes via GitHub's SHA-256 metadata. All runtime
 # and checksum validation stays on Actions; never execute release files locally.
 gh api "repos/$GH_REPO/releases/tags/$tag" > published-release.json

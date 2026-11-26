@@ -183,6 +183,8 @@ gh workflow run cli-release.yml --ref custom-extensions \
 
 其中逻辑 dump/restore 检查针对独立数据库中的 pg_duckdb 与用户表；pg_durable 检查工作流执行及重启后已完成结果保留。未验证 durable 控制数据库的逻辑备份恢复，不应将控制数据库直接用通用 pg_restore 复制为卫星数据库。
 
+便携版在附件上传完成并转为正式发布时自动设为 GitHub Latest，常规发布和补发流程均适用；草稿阶段不更改 Latest。
+
 ### Docker 镜像
 
 核心 Action：

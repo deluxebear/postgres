@@ -386,7 +386,7 @@ jobs:
             cat release-error.log >&2; exit 1
           fi
           gh release upload "$tag" artifacts/*.tar.gz artifacts/*.sha256 artifacts/*.extensions.json --clobber
-          gh release edit "$tag" --draft=false --latest=false
+          gh release edit "$tag" --draft=false --latest
           gh release view "$tag" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
 
   recover-publish:
