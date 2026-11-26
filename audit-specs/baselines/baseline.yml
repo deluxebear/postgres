@@ -145,6 +145,12 @@ file:
     owner: "1006"
     group: "0"
     filetype: file
+  /etc/adminapi/pg_upgrade_scripts/start_guard.sh:
+    exists: true
+    mode: "0755"
+    owner: "1006"
+    group: "0"
+    filetype: file
   /etc/alternatives/README:
     exists: true
     mode: "0644"
@@ -4465,96 +4471,6 @@ file:
     owner: "1006"
     group: "0"
     filetype: file
-  /etc/nginx/fastcgi.conf:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/fastcgi.conf.default:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/fastcgi_params:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/fastcgi_params.default:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/koi-utf:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/koi-win:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/mime.types:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/mime.types.default:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/nginx.conf:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/nginx.conf.default:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/scgi_params:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/scgi_params.default:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/uwsgi_params:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/uwsgi_params.default:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /etc/nginx/win-utf:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
   /etc/nix/nix.conf:
     exists: true
     mode: "0644"
@@ -4737,7 +4653,7 @@ file:
     filetype: file
   /etc/pgbouncer/pgbouncer.ini:
     exists: true
-    mode: "0700"
+    mode: "0600"
     owner: "1000"
     group: "0"
     filetype: file
@@ -5001,7 +4917,7 @@ file:
     filetype: file
   /etc/salt/gpgkeys:
     exists: true
-    mode: "0755"
+    mode: "0700"
     owner: "993"
     group: "987"
     filetype: directory
@@ -5461,6 +5377,12 @@ file:
     owner: "0"
     group: "0"
     filetype: file
+  /etc/systemd/system/commence-restore.service:
+    exists: true
+    mode: "0644"
+    owner: "0"
+    group: "0"
+    filetype: file
   /etc/systemd/system/database-optimizations.service:
     exists: true
     mode: "0644"
@@ -5498,12 +5420,6 @@ file:
     group: "0"
     filetype: file
   /etc/systemd/system/logrotate.timer.d/override.conf:
-    exists: true
-    mode: "0644"
-    owner: "0"
-    group: "0"
-    filetype: file
-  /etc/systemd/system/nginx.service:
     exists: true
     mode: "0644"
     owner: "0"
@@ -5964,24 +5880,6 @@ file:
     mode: "0644"
     owner: "1004"
     group: "1008"
-    filetype: file
-  /home/nginx/.bash_logout:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "1009"
-    filetype: file
-  /home/nginx/.bashrc:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "1009"
-    filetype: file
-  /home/nginx/.profile:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "1009"
     filetype: file
   /home/pgbouncer/.bash_logout:
     exists: true
@@ -6625,20 +6523,20 @@ file:
     owner: "0"
     group: "0"
     filetype: file
-  ? /root/.launchpadlib/api.launchpad.net/cache/api.launchpad.net,devel,-application,vnd.sun.wadl+xml,2f09acb494bdefdbf8ef0d1396a05e86
-  : exists: true
+  /root/.launchpadlib/api.launchpad.net/cache/api.launchpad.net,devel,-application,vnd.sun.wadl+xml,2f09acb494bdefdbf8ef0d1396a05e86:
+    exists: true
     mode: "0600"
     owner: "0"
     group: "0"
     filetype: file
-  ? /root/.launchpadlib/api.launchpad.net/cache/api.launchpad.net,devel,~ansible,+archive,ubuntu,ansible,ws.op=getSigningKeyData-application,json,ae98eb0a68e7ef80c2d2e3b0acf85696
-  : exists: true
+  /root/.launchpadlib/api.launchpad.net/cache/api.launchpad.net,devel,~ansible,+archive,ubuntu,ansible,ws.op=getSigningKeyData-application,json,ae98eb0a68e7ef80c2d2e3b0acf85696:
+    exists: true
     mode: "0600"
     owner: "0"
     group: "0"
     filetype: file
-  ? /root/.launchpadlib/api.launchpad.net/cache/api.launchpad.net,devel,~ansible,name=%22ansible%22&ws.op=getPPAByName-application,json,7ac403cb58cf1f9e62db6d4019d76690
-  : exists: true
+  /root/.launchpadlib/api.launchpad.net/cache/api.launchpad.net,devel,~ansible,name=%22ansible%22&ws.op=getPPAByName-application,json,7ac403cb58cf1f9e62db6d4019d76690:
+    exists: true
     mode: "0600"
     owner: "0"
     group: "0"
@@ -35911,8 +35809,8 @@ file:
     owner: "0"
     group: "0"
     filetype: file
-  ? /usr/local/aws-cli/v2/2.23.11/dist/awscli/examples/ec2/describe-local-gateway-route-table-virtual-interface-group-associations.rst
-  : exists: true
+  /usr/local/aws-cli/v2/2.23.11/dist/awscli/examples/ec2/describe-local-gateway-route-table-virtual-interface-group-associations.rst:
+    exists: true
     mode: "0644"
     owner: "0"
     group: "0"
@@ -62023,24 +61921,6 @@ file:
     owner: "0"
     group: "0"
     filetype: directory
-  /usr/local/nginx/html/50x.html:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /usr/local/nginx/html/index.html:
-    exists: true
-    mode: "0644"
-    owner: "1005"
-    group: "0"
-    filetype: file
-  /usr/local/nginx/sbin/nginx:
-    exists: true
-    mode: "0755"
-    owner: "1005"
-    group: "0"
-    filetype: file
   /usr/local/openresty/COPYRIGHT:
     exists: true
     mode: "0664"
@@ -91037,9 +90917,6 @@ group:
   news:
     exists: true
     gid: 9
-  nginx:
-    exists: true
-    gid: 1009
   nixbld:
     exists: true
     gid: 30000
@@ -91531,7 +91408,7 @@ kernel-param:
   kernel.usermodehelper.inheritable:
     value: 4294967295 511
   kernel.version:
-    value: '#17~24.04.1-Ubuntu SMP Wed Nov  5 10:32:15 UTC 2025'
+    value: "#17~24.04.1-Ubuntu SMP Wed Nov  5 10:32:15 UTC 2025"
   kernel.warn_limit:
     value: "0"
   kernel.watchdog:
@@ -95908,12 +95785,6 @@ user:
     gid: 9
     home: /var/spool/news
     shell: /usr/sbin/nologin
-  nginx:
-    exists: true
-    uid: 1005
-    gid: 1009
-    home: /home/nginx
-    shell: /bin/sh
   nixbld1:
     exists: true
     uid: 30001
@@ -96117,7 +95988,7 @@ user:
     uid: 1000
     gid: 1003
     home: /home/pgbouncer
-    shell: /usr/sbin/nolign
+    shell: /usr/sbin/nologin
   polkitd:
     exists: true
     uid: 991

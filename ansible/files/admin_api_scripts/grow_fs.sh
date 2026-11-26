@@ -43,7 +43,7 @@ echo "Using devices - Root: $XVDA_DEVICE, Data: $XVDH_DEVICE"
 # Get root partition using findmnt
 ROOT_DEVICE_FULL=$(findmnt -no SOURCE /)
 ROOT_DEVICE=$(lsblk -no PKNAME "$ROOT_DEVICE_FULL")
-ROOT_PARTITION_NUMBER=$(echo "$ROOT_DEVICE_FULL" | sed "s|.*${ROOT_DEVICE}p||")
+ROOT_PARTITION_NUMBER=${ROOT_DEVICE_FULL##*"${ROOT_DEVICE}"p}
 
 if ! [[ $ROOT_PARTITION_NUMBER =~ ^[0-9]+$ ]]; then
 	echo "Error: ROOT_PARTITION_NUMBER is not a valid number: $ROOT_PARTITION_NUMBER"
@@ -56,7 +56,7 @@ if [ -b "${XVDH_DEVICE}" ]; then
 
 		# Explicitly reserving 100MiB worth of blocks for the data volume
 		#
-		# This is owned in $GIT_DIR/ebssurrogate/scripts/surrogate-bootstrap-nix.sh
+		# This is owned in $GIT_DIR/packer/scripts/surrogate-bootstrap-nix.sh
 		RESERVED_DATA_VOLUME_BLOCK_COUNT=$((100 * 1024 * 1024 / 4096))
 		tune2fs -r $RESERVED_DATA_VOLUME_BLOCK_COUNT "${XVDH_DEVICE}"
 
