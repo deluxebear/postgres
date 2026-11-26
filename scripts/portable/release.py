@@ -132,6 +132,14 @@ def tar_text(archive, suffix):
         return source.extractfile(members[0]).read().decode()
 
 
+def sql_version(archive, name, version):
+    control = tar_text(archive, name + ".control")
+    match = re.search(r"^\s*default_version\s*=\s*'([^']+)'", control, re.M)
+    if not match:
+        raise ValueError(f"Missing default SQL version for {name}")
+    return match[1].replace("@CARGO_VERSION@", version)
+
+
 def replace_once(text, old, new):
     if text.count(old) != 1:
         raise ValueError(f"Upstream packaging changed: expected exactly one {old!r}")
@@ -158,6 +166,7 @@ def extension_sources(plan, checkout, cache):
     duck["version"] = duck["tag"].removeprefix("v")
     duck["source"], archive = download(
         f'https://github.com/duckdb/pg_duckdb/archive/{duck["commit"]}.tar.gz', cache)
+    duck["sql_version"] = sql_version(archive, "pg_duckdb", duck["version"])
     tree = api(f'repos/duckdb/pg_duckdb/git/trees/{duck["commit"]}?recursive=1')
     if tree.get("truncated"):
         raise ValueError("Truncated pg_duckdb source tree")
@@ -181,6 +190,7 @@ def extension_sources(plan, checkout, cache):
     url = (f'https://github.com/microsoft/pg_durable/releases/download/{durable["tag"]}/'
            f'pg_durable-{durable["version"]}.tar.gz')
     durable["source"], archive = download(url, cache)
+    durable["sql_version"] = sql_version(archive, "pg_durable", durable["version"])
     cargo = tomllib.loads(tar_text(archive, "Cargo.toml"))
     if cargo["package"]["version"] != durable["version"] or "pg17" not in cargo["features"]:
         raise ValueError("pg_durable release version or PG17 support mismatch")

@@ -17,7 +17,7 @@ def inventory(bundle, platform):
         if match:
             extensions[control.stem] = match[1]
     for name, extension in release["extensions"].items():
-        if extensions.get(name) != extension["version"]:
+        if extensions.get(name) != extension["sql_version"]:
             raise ValueError(f"{name}: actual control version differs from resolved stable release")
     version = subprocess.check_output([str(bundle / "bin/postgres"), "--version"], text=True).strip()
     result = {"platform": platform, "postgresql": version, "extensions": extensions, "release": release}

@@ -46,7 +46,7 @@ import json, subprocess, sys
 for name, extension in json.load(open(sys.argv[1]))['extensions'].items():
     actual = subprocess.check_output(['psql', '-XAt', '-v', 'ON_ERROR_STOP=1', '-c',
         f"SELECT extversion FROM pg_extension WHERE extname='{name}'"], text=True).strip()
-    assert actual == extension['version'], (name, actual, extension['version'])
+    assert actual == extension['sql_version'], (name, actual, extension['sql_version'])
 PY
 
 probe() {
