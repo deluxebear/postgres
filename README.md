@@ -181,6 +181,8 @@ gh workflow run cli-release.yml --ref custom-extensions \
 
 此流程的验证统一在 GitHub Actions 上执行：源码准备任务运行发布逻辑单元测试和 Shell 静态检查，随后执行三个平台的原生构建与无 Nix 运行测试。运行测试通过后，即使 `publish=false` 也会核对三平台全部扩展版本、来源和 SHA-256，并生成可审阅的发布说明附件。开发时通过 `publish=false` 触发验证，不在本机进行构建或运行验证；仅调整验证脚本时可使用 `artifact_run_id` 对同一份已构建产物重测，该模式没有发布权限路径。
 
+其中逻辑 dump/restore 检查针对独立数据库中的 pg_duckdb 与用户表；pg_durable 检查工作流执行及重启后已完成结果保留。未验证 durable 控制数据库的逻辑备份恢复，不应将控制数据库直接用通用 pg_restore 复制为卫星数据库。
+
 ### Docker 镜像
 
 核心 Action：

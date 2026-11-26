@@ -361,7 +361,8 @@ def notes(plan, inventories):
               "- 解压后使用 `bin/initdb`、`bin/pg_ctl` 和 `bin/psql`；运行时无需 Docker 或 Nix。",
               "- Linux 包依赖宿主 glibc；验证环境为 Ubuntu 24.04，不适用于原生 Alpine/musl。",
               "- 配置模板已追加 `pg_duckdb`、`pg_durable` 预加载项；安装 SQL 扩展仍需执行 `CREATE EXTENSION`。",
-              "- 三平台均通过无 Nix 环境中的初始化、扩展安装、查询、工作流执行、重启、dump/restore 和 pg_duckdb SQL 升级路径检查。",
+              "- 三平台均通过无 Nix 环境中的初始化、扩展安装、查询、durable 工作流执行与重启后结果保留、pg_duckdb dump/restore 和 SQL 升级路径检查。",
+              "- 未验证 pg_durable 控制数据库的逻辑备份恢复；不能将控制数据库直接 pg_restore 为卫星数据库。",
               (f'- 已验证从 [{plan["predecessor"]["tag"]}]({plan["predecessor"]["url"]}) 的真实便携二进制升级，包含旧数据和已完成 durable 工作流结果。'
                if plan.get("predecessor") else "- 首次发布，没有此前包含这两个扩展的定制便携包，未执行跨包二进制升级验证。"),
               "- 不保证升级时仍在运行的 durable 工作流能够跨版本回放。",

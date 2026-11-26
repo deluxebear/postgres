@@ -44,6 +44,8 @@ CREATE ROLE portable_workflow_user LOGIN;
 SELECT df.grant_usage('portable_workflow_user');
 CREATE TABLE portable_probe (amount integer);
 INSERT INTO portable_probe VALUES (19), (23);
+CREATE TABLE portable_completed_workflow (id text);
+GRANT SELECT ON portable_completed_workflow TO portable_workflow_user;
 SQL
 # Check the actual SQL versions against the packaged release manifest.
 python3 - "$bundle/portable-release.json" <<'PY'
@@ -72,14 +74,26 @@ SELECT (df.result(:'instance_id')::jsonb->'rows'->0->>'answer' = '42') AS result
 \else
   \quit 1
 \endif
+RESET ROLE;
+INSERT INTO portable_completed_workflow VALUES (:'instance_id');
 SQL
-pg_dump --format=custom -f "$test_root/probe.dump"
+# Validate pg_duckdb logical restore in its own database. pg_durable's control
+# provider cannot be copied into a satellite database by a generic pg_restore.
+createdb duckdb_dump_source
+"${psql[@]}" -d duckdb_dump_source <<'SQL'
+CREATE EXTENSION pg_duckdb;
+CREATE TABLE portable_probe (amount integer);
+INSERT INTO portable_probe VALUES (19), (23);
+SQL
+pg_dump --format=custom -d duckdb_dump_source -f "$test_root/probe.dump"
 createdb restored
 pg_restore --exit-on-error -d restored "$test_root/probe.dump"
 PGDATABASE=restored probe
 pg_ctl -D "$data" -m fast -w stop >/dev/null
 start
 probe
+wait_for_durable_control
+[[ $("${psql[@]}" -Atq -c "SET ROLE portable_workflow_user; SELECT df.result(id)::jsonb->'rows'->0->>'answer' FROM portable_completed_workflow") == 42 ]]
 
 # Check available predecessor SQL upgrade paths against the new binary.
 createdb sql_upgrade
