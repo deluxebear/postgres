@@ -278,7 +278,7 @@ def patch_checkout(plan, checkout):
         raise ValueError("Expected one preload setting")
     config.write_text(text)
     # Keep validation scripts alongside the exact source snapshot.
-    for filename in ("release.py", "test.sh", "inventory.py", "previous.py", "upgrade.sh"):
+    for filename in ("release.py", "test.sh", "inventory.py", "previous.py", "upgrade.sh", "wait-control.sh"):
         destination = checkout / "scripts/portable" / filename
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / "scripts/portable" / filename, destination)

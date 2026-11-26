@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Run the relocated bundle as an ordinary user, with no Nix store available.
 set -euo pipefail
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=scripts/portable/wait-control.sh
+source "$script_dir/wait-control.sh"
 bundle=$(cd "${1:?Usage: test.sh <bundle>}" && pwd)
 if [[ -e /nix/store ]]; then
   echo 'Portability validation requires a machine/container without /nix/store' >&2
@@ -56,13 +59,9 @@ probe() {
   [[ $("${psql[@]}" -At -c "SELECT r['n']::integer FROM duckdb.query('SELECT count(*) AS n FROM duckdb_extensions() WHERE extension_name=''httpfs'' AND loaded') r") == 1 ]]
 }
 probe
-# Poll readiness in separate transactions; bound both waiting and execution.
-ready=false
-for _ in {1..90}; do
-  if [[ $("${psql[@]}" -At -c 'SELECT df.validate_installation()' 2>/dev/null) == t ]]; then ready=true; break; fi
-  sleep 1
-done
-[[ "$ready" == true ]]
+# Validate installation structure separately from asynchronous worker readiness.
+[[ $("${psql[@]}" -At -c 'SELECT df.validate_installation()') == t ]]
+wait_for_durable_control
 "${psql[@]}" <<'SQL'
 SET statement_timeout = '90s';
 SET ROLE portable_workflow_user;

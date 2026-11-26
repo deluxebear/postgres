@@ -46,7 +46,7 @@ jobs:
         working-directory: .workflow
         run: |
           python3 -m unittest discover -s tests -p test_portable_release.py
-          shellcheck scripts/portable/test.sh scripts/portable/upgrade.sh
+          shellcheck -x scripts/portable/test.sh scripts/portable/upgrade.sh scripts/portable/wait-control.sh
           bash -n scripts/portable/test.sh
           bash -n scripts/portable/upgrade.sh
       - name: Discover latest stable upstream and extension releases
@@ -254,7 +254,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           python3 -m unittest discover -s tests -p test_portable_release.py
-          shellcheck scripts/portable/test.sh scripts/portable/upgrade.sh
+          shellcheck -x scripts/portable/test.sh scripts/portable/upgrade.sh scripts/portable/wait-control.sh
       - name: Download exact previously built archive
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Upgrade an actual, previously published portable database to the new binary.
 set -euo pipefail
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=scripts/portable/wait-control.sh
+source "$script_dir/wait-control.sh"
 current=$(cd "${1:?Current bundle is required}" && pwd)
 previous=$(cd "${2:?Previous bundle is required}" && pwd)
 export PGHOST=127.0.0.1 PGPORT=55433 PGUSER=portable_admin PGDATABASE=postgres
@@ -36,6 +39,10 @@ INSERT INTO upgrade_probe VALUES (19), (23);
 SET statement_timeout = '90s';
 CREATE TABLE completed_workflow (id text);
 GRANT SELECT ON completed_workflow TO portable_workflow_user;
+SQL
+wait_for_durable_control
+"${psql[@]}" <<'SQL'
+SET statement_timeout = '90s';
 SET ROLE portable_workflow_user;
 SELECT df.start(df.sql('SELECT 42 AS answer'), 'previous-portable-probe') AS instance_id \gset
 SELECT df.await_instance(:'instance_id');
@@ -45,6 +52,7 @@ SQL
 pg_ctl -D "$data" -m fast -w stop >/dev/null
 export PATH="$current/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 pg_ctl -D "$data" -l "$data/server.log" -w start >/dev/null
+wait_for_durable_control
 "${psql[@]}" <<'SQL'
 ALTER EXTENSION pg_duckdb UPDATE;
 ALTER EXTENSION pg_durable UPDATE;
