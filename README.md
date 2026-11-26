@@ -185,6 +185,264 @@ gh workflow run cli-release.yml --ref custom-extensions \
 
 便携版在附件上传完成并转为正式发布时自动设为 GitHub Latest，常规发布和补发流程均适用；草稿阶段不更改 Latest。
 
+#### Linux 服务器安装与启动
+
+以下以 **Ubuntu 24.04、systemd、全新数据目录**为例，安装已发布的 `17.12.0.005-cli`。适用于 x86_64 / ARM64，不需要 Docker 或 Nix；其他发行版需自行确认 glibc 和动态加载器兼容性。先确认本机 `5432` 端口未被其他 PostgreSQL 实例占用。下列命令由具有 sudo 权限的用户执行；只在目标服务器上执行，不是仓库构建步骤。
+
+**1. 下载、校验并安装程序。** 固定版本便于复现；以后更换版本时同时调整 tag 和文件名，不自动覆盖正在运行的程序。
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl tar openssl
+
+# 后续安装命令在 Bash 中执行；任一步失败时停止，不继续覆盖目录。
+set -euo pipefail
+case "$(uname -m)" in
+  x86_64) PG_ARCH=linux-x64 ;;
+  aarch64|arm64) PG_ARCH=linux-arm64 ;;
+  *) echo '不支持的 CPU 架构'; exit 1 ;;
+esac
+PG_RELEASE=17.12.0.005-cli
+PG_BUNDLE="supabase-postgres-${PG_RELEASE}-${PG_ARCH}"
+PG_URL="https://github.com/deluxebear/postgres/releases/download/postgres-${PG_RELEASE}"
+PG_DOWNLOAD_DIR=$(mktemp -d)
+cd "$PG_DOWNLOAD_DIR"
+curl --fail --location --retry 3 -O "$PG_URL/$PG_BUNDLE.tar.gz"
+curl --fail --location --retry 3 -O "$PG_URL/$PG_BUNDLE.tar.gz.sha256"
+sha256sum -c "$PG_BUNDLE.tar.gz.sha256"
+
+sudo install -d -m 0755 /opt/portable-postgres
+sudo test ! -e "/opt/portable-postgres/$PG_BUNDLE"
+sudo test ! -e /opt/portable-postgres/current
+sudo test ! -L /opt/portable-postgres/current
+sudo tar --no-same-owner -xzf "$PG_BUNDLE.tar.gz" -C /opt/portable-postgres
+sudo chown -R root:root "/opt/portable-postgres/$PG_BUNDLE"
+sudo ln -s "/opt/portable-postgres/$PG_BUNDLE" /opt/portable-postgres/current
+```
+
+本节使用固定路径 `/opt/portable-postgres/current`；程序目录由 root 管理，数据库进程不需要修改它。包内 `portable-release.json` 和 `extensions.json` 可查看构建来源及扩展版本。本例是 PostgreSQL 加扩展的独立部署，不会自动安装完整 Supabase 服务、角色及 migrations。
+
+**2. 创建运行用户和数据目录。** 已有 `postgres` 系统用户时复用该用户，不改变其他数据库服务的目录。
+
+```bash
+if ! id postgres >/dev/null 2>&1; then
+  sudo useradd --system --user-group --home-dir /var/lib/postgresql \
+    --shell /usr/sbin/nologin postgres
+fi
+sudo install -d -o postgres -g postgres -m 0700 /var/lib/postgresql/portable
+sudo install -d -o postgres -g postgres -m 0700 /var/lib/postgresql/portable/keys
+sudo install -d -o root -g root -m 0700 /etc/portable-postgres
+```
+
+**3. 初始化数据库并保存后台连接凭据。** 下列步骤仅用于首次安装。随机生成数据库 `postgres` 超级用户的密码，由 initdb 设置；同一密码保存到 root 独占的 systemd 环境文件中，供 pg_durable 的后台 SQLx 连接通过 SCRAM 认证使用。不要对已有数据目录重复初始化，也不要在已有实例上重新生成这份密码。
+
+```bash
+sudo test ! -e /var/lib/postgresql/portable/data
+sudo test ! -e /etc/portable-postgres/worker.env
+sudo bash <<'ROOT'
+set -euo pipefail
+umask 077
+password_file=/var/lib/postgresql/portable/.initdb-password
+openssl rand -hex 32 > "$password_file"
+chown postgres:postgres "$password_file"
+chmod 0600 "$password_file"
+sudo -u postgres /opt/portable-postgres/current/bin/initdb \
+  -D /var/lib/postgresql/portable/data -U postgres \
+  --encoding=UTF8 --locale=C --auth-local=peer --auth-host=scram-sha-256 \
+  --pwfile="$password_file"
+printf 'PGPASSWORD=%s\n' "$(cat "$password_file")" > /etc/portable-postgres/worker.env
+chmod 0600 /etc/portable-postgres/worker.env
+rm "$password_file"
+ROOT
+```
+
+`worker.env` 由 systemd 读取并传给数据库进程，不把密码写入 unit、连接 URL 或命令行。SQLx 支持 `PGPASSWORD`，见 [SQLx 0.8.6 连接选项](https://docs.rs/sqlx-postgres/0.8.6/sqlx_postgres/struct.PgConnectOptions.html)。如果以后修改数据库 `postgres` 的密码，必须同步更新该文件并重启服务；普通应用角色应使用各自的密码。
+
+**4. 配置预加载、数据路径和认证。** 使用包内模板，保留已有预加载库；当前发布包的模板已包含 `pg_duckdb` 和 `pg_durable`。配置放在数据目录内，独立于程序版本目录。
+
+```bash
+sudo -u postgres cp \
+  /opt/portable-postgres/current/share/supabase-cli/config/postgresql.conf.template \
+  /var/lib/postgresql/portable/data/postgresql.conf
+
+sudo -u postgres tee -a /var/lib/postgresql/portable/data/postgresql.conf >/dev/null <<'CONF'
+
+# Server-specific settings override the local-development template.
+listen_addresses = '127.0.0.1'
+port = 5432
+unix_socket_directories = '/run/portable-postgres'
+unix_socket_permissions = 0770
+password_encryption = 'scram-sha-256'
+logging_collector = off
+log_min_messages = warning
+cron.database_name = 'postgres'
+pgsodium.getkey_script = '/opt/portable-postgres/current/share/supabase-cli/config/pgsodium_getkey.sh'
+vault.getkey_script = '/opt/portable-postgres/current/share/supabase-cli/config/pgsodium_getkey.sh'
+pg_durable.worker_role = 'postgres'
+pg_durable.database = 'postgres'
+pg_durable.host = '127.0.0.1'
+CONF
+
+sudo -u postgres tee /var/lib/postgresql/portable/data/pg_hba.conf >/dev/null <<'HBA'
+# TYPE DATABASE USER ADDRESS METHOD
+local all postgres peer
+local all all scram-sha-256
+host all all 127.0.0.1/32 scram-sha-256
+HBA
+```
+
+当前包的 `shared_preload_libraries` 为 `pg_stat_statements, pg_cron, pg_net, pgsodium, supabase_vault, supautils, pg_duckdb, pg_durable`。若维护自己的配置，应在原有列表中追加两个扩展，不能覆盖其他库。**修改预加载列表后要重启，reload 不生效。** pg_durable 的后台角色必须是超级用户，但应用工作流应由普通角色提交。其控制数据库在本例中固定为 `postgres`，见[上游权限说明](https://github.com/microsoft/pg_durable/blob/v0.2.9/README.md#multi-user-setup)。
+
+本例只监听本机，HBA 不允许远程访问。需要远程连接时，按实际需求配置监听地址、受限客户端网段、TLS 和防火墙，再重载 HBA；不要直接开放任意来源的 trust 认证。
+
+**5. 安装 systemd 服务并启动。** 使用前台 `postgres` 进程与 `Type=simple`，不依赖该二进制是否编译了 systemd notify 支持。`KillSignal=SIGINT` 请求 PostgreSQL 快速关闭，`KillMode=mixed` 先通知主进程，允许它管理子进程；日志写入 journal。参见 [PostgreSQL 17 服务启动说明](https://www.postgresql.org/docs/17/server-start.html)。
+
+```bash
+sudo tee /etc/systemd/system/portable-postgres.service >/dev/null <<'UNIT'
+[Unit]
+Description=Portable PostgreSQL 17 with pg_duckdb and pg_durable
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=postgres
+Group=postgres
+Environment=HOME=/var/lib/postgresql/portable
+Environment=PATH=/opt/portable-postgres/current/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PGSODIUM_KEY_FILE=/var/lib/postgresql/portable/keys/pgsodium.key
+Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+Environment=CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+EnvironmentFile=/etc/portable-postgres/worker.env
+RuntimeDirectory=portable-postgres
+RuntimeDirectoryMode=0750
+WorkingDirectory=/var/lib/postgresql/portable
+ExecStart=/opt/portable-postgres/current/bin/postgres -D /var/lib/postgresql/portable/data
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=infinity
+Restart=on-failure
+RestartSec=5
+UMask=0077
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now portable-postgres
+sudo systemctl status portable-postgres --no-pager
+sudo journalctl -u portable-postgres -n 100 --no-pager
+sudo -u postgres /opt/portable-postgres/current/bin/pg_isready \
+  -h /run/portable-postgres -p 5432 -U postgres -d postgres
+```
+
+`Type=simple` 的 active 状态不代表 SQL 已可连接，应以 `pg_isready` 或实际查询判断。首次启动时后台 worker 等待 `CREATE EXTENSION pg_durable` 的日志是正常现象。密钥脚本首次生成 `/var/lib/postgresql/portable/keys/pgsodium.key`；备份并妥善保管此文件，不要在重启或升级时重新生成，否则已加密数据可能无法解密。
+
+#### 启用 pg_duckdb 和 pg_durable
+
+**1. 在控制数据库安装扩展并创建应用角色。** `shared_preload_libraries` 负责加载二进制，`CREATE EXTENSION` 才会在当前数据库创建 SQL 对象，两步都需要。以下在服务器上通过本地 peer 认证连接，不需要填写管理员密码。
+
+```bash
+sudo -u postgres /opt/portable-postgres/current/bin/psql \
+  -X -v ON_ERROR_STOP=1 -h /run/portable-postgres -p 5432 -U postgres -d postgres
+```
+
+进入 psql 后执行：
+
+```sql
+SHOW shared_preload_libraries;
+CREATE EXTENSION IF NOT EXISTS pg_duckdb;
+CREATE EXTENSION IF NOT EXISTS pg_durable;
+CREATE ROLE portable_app LOGIN;
+\password portable_app
+SELECT df.grant_usage('portable_app');
+SELECT extname, extversion FROM pg_extension
+WHERE extname IN ('pg_duckdb', 'pg_durable');
+```
+
+`CREATE ROLE` 只执行一次；`\password` 会交互设置应用密码。不要将应用设为超级用户，也不要为方便测试开启 `pg_durable.enable_superuser_instances`。`df.grant_usage` 授予工作流接口权限；工作流访问业务表时，仍需另外授予该角色相应表、schema 权限。安装更多数据库时，先等控制运行时就绪，再在目标数据库安装扩展并授权，不直接复制控制库的内部 schema。
+
+**2. 验证 pg_duckdb。** 在刚才的管理员 psql 会话中执行，返回结果应为 `42`。`duckdb.force_execution` 只在本事务中生效，用于确认查询由 DuckDB 执行。
+
+```sql
+CREATE TABLE public.portable_duckdb_demo (amount integer);
+INSERT INTO public.portable_duckdb_demo VALUES (19), (23);
+BEGIN;
+SET LOCAL duckdb.force_execution = true;
+SELECT sum(amount) FROM public.portable_duckdb_demo;
+COMMIT;
+\q
+```
+
+**3. 等待 durable 后台控制运行时就绪。** `CREATE EXTENSION` 返回与后台初始化完成之间可能有几秒延迟，`df.validate_installation()` 不能替代后台就绪判断。对于本例全新安装的 `0.2.9`，可在服务器上执行以下有超时的轮询：
+
+```bash
+PG_READY=false
+for attempt in $(seq 1 90); do
+  if [ "$(sudo -u postgres /opt/portable-postgres/current/bin/psql -XAt \
+    -v ON_ERROR_STOP=1 -h /run/portable-postgres -p 5432 -d postgres \
+    -c "SELECT to_regclass('_duroxide._worker_ready') IS NOT NULL")" = t ]; then
+    if [ "$(sudo -u postgres /opt/portable-postgres/current/bin/psql -XAt \
+      -v ON_ERROR_STOP=1 -h /run/portable-postgres -p 5432 -d postgres \
+      -c 'SELECT EXISTS(SELECT 1 FROM _duroxide._worker_ready WHERE schema_version >= 1)')" = t ]; then
+      PG_READY=true
+      break
+    fi
+  fi
+  sleep 1
+done
+if [ "$PG_READY" != true ]; then
+  echo 'durable 后台未就绪，请检查 journal 中的认证或初始化错误' >&2
+else
+  echo 'durable 控制运行时已就绪'
+fi
+```
+
+`_duroxide` 是当前版本内部 schema，本例轮询针对全新安装；历史升级实例应通过 `SELECT df.duroxide_schema()` 取得实际 provider schema。若日志报告 password authentication failed，核对数据库管理员密码与 `worker.env`，修正后重启服务。
+
+**4. 以普通角色执行 durable 工作流。** 就绪后使用上面设置的应用密码，通过 TCP/SCRAM 登录：
+
+```bash
+/opt/portable-postgres/current/bin/psql \
+  -X -v ON_ERROR_STOP=1 -W -h 127.0.0.1 -p 5432 -U portable_app -d postgres
+```
+
+在 psql 中执行：
+
+```sql
+SET statement_timeout = '90s';
+SELECT df.start(df.sql('SELECT 42 AS answer'), 'linux-install-demo') AS instance_id \gset
+SELECT df.await_instance(:'instance_id');
+SELECT df.result(:'instance_id');
+```
+
+结果 JSON 的 `rows[0].answer` 应为 `42`。如果提示控制 worker 尚未初始化，检查上一节的就绪状态；如果提示 superuser instances disabled，应改用 `portable_app`，而不是关闭保护。HTTP 工作流需另行配置允许访问的域名和 HTTP 权限，见 [pg_durable 0.2.9 用户指南](https://github.com/microsoft/pg_durable/blob/v0.2.9/USER_GUIDE.md)。
+
+#### 服务管理与更新
+
+```bash
+sudo systemctl restart portable-postgres   # 预加载项、后台连接环境修改后重启
+sudo systemctl reload portable-postgres    # 仅重载支持 reload 的 PostgreSQL 配置
+sudo systemctl stop portable-postgres
+sudo systemctl start portable-postgres
+sudo journalctl -u portable-postgres -f
+```
+
+此服务不自动初始化或升级数据库。更新程序时，先按备份方案备份数据及 `keys/pgsodium.key`，校验并解压新版本到独立目录，停止服务后切换 `current` 链接，再启动服务；不要在运行中切换程序链接。仅适用于确认兼容的同一 PostgreSQL 主版本更新，跨主版本要使用相应的 pg_upgrade 或迁移流程。安装新二进制并重启、等 durable 控制运行时就绪后，在每个已安装扩展的数据库中按发布说明执行：
+
+```sql
+ALTER EXTENSION pg_duckdb UPDATE;
+ALTER EXTENSION pg_durable UPDATE;
+SELECT df.grant_usage('portable_app');
+```
+
+只对该数据库实际安装的扩展执行更新；如果应用另外用了 HTTP 权限，按上游版本说明重新授予相应权限。扩展升级不支持简单切回旧程序链接来回滚，已升级的 SQL/数据可能与旧二进制不兼容。durable 正在运行的历史工作流跨版本回放和控制数据库完整逻辑恢复不在本仓库当前验证保证内。
+
 ### Docker 镜像
 
 核心 Action：
