@@ -148,43 +148,6 @@ docker/pgctld/orioledb-postgresql.conf.tmpl
 
 ## 构建方式
 
-### 便携二进制包（无需 Docker / Nix）
-
-`.github/workflows/cli-release.yml` 基于上游 `v17.12.0.005-cli` 的 CLI Release 流程改造，独立于下方 Docker 发布流程。每 6 小时检查 Supabase 最新稳定 PG17 `*-cli` release；排除 draft、prerelease、test、RC、preview 等版本，已发布的上游版本直接跳过。只有出现新的上游 CLI release 时才自动构建，扩展单独发布新版不会触发重发。
-
-每次构建都从官方 GitHub Releases 解析 `pg_duckdb` 和 `pg_durable` 的最新稳定版本，固定 release tag、commit、源码 SHA-256、DuckDB/httpfs 子模块及 Cargo.lock。动态版本只写入当次上游源码快照，不修改当前 Docker/Nix 包的版本固定值。如果上游构建布局、PostgreSQL 支持或 pgrx/Rust 工具链不兼容，任务失败并停止发布，不退回旧扩展版本。新增 pgrx/Rust 组合需要先在项目的 `nix/cargo-pgrx/versions.json` 中维护并验证支持。
-
-沿用上游的三个原生构建目标：Linux x64、Linux ARM64、macOS ARM64。保留 CLI 精简扩展，并加入 `pg_duckdb` 和 `pg_durable`；配置模板保留已有预加载库并追加这两个库。打包后在独立的无 `/nix/store` runner 上验证重定位、初始化、扩展安装、DuckDB 查询与 httpfs 加载、durable 工作流执行、重启、dump/restore 和随包可安装的前序 SQL 版本升级。SQL 升级测试使用新版二进制，不代表旧二进制或运行中 durable 工作流的跨版本回放验证。
-
-发布 tag 示例为 `postgres-17.12.0.005-cli`，指向实际构建的定制上游源码快照；不覆盖已有 tag 或完成的 release。全部平台通过后才上传草稿并正式发布。附件包括各平台 `.tar.gz`、`.sha256` 和 `.extensions.json`；包内的 `portable-release.json` 记录源码和依赖哈希。Release 说明包含两个定制扩展的版本、官方 release 链接，以及从实际 `.control` 文件提取的全部随包 SQL 扩展默认版本。三平台扩展版本或来源不一致时停止发布。
-
-可手动验证或发布：
-
-```bash
-# 只构建和测试，不推送 tag 或发布；即使已有 release 也会执行验证
-gh workflow run cli-release.yml --ref custom-extensions -f publish=false
-
-# 发布最新稳定上游版本（已发布则跳过）
-gh workflow run cli-release.yml --ref custom-extensions -f publish=true
-
-# 指定一个稳定 PG17 CLI release 进行构建验证
-gh workflow run cli-release.yml --ref custom-extensions \
-  -f upstream_ref=v17.12.0.005-cli -f publish=false
-```
-
-定时任务需要此 workflow 存在于仓库默认分支，并在 Actions 设置中启用。Linux 包以 Ubuntu 24.04 为无 Nix 验证环境，仍依赖宿主 glibc，不适用于原生 Alpine/musl。解压后可通过 `bin/initdb`、`bin/pg_ctl` 和 `bin/psql` 管理数据库；生产部署的用户、数据目录、认证、密钥管理及 systemd 服务需另行配置。
-
-发布自动化的本地检查：
-
-```bash
-python3 -m unittest discover -s tests -p test_portable_release.py
-actionlint .github/workflows/cli-release.yml
-shellcheck scripts/portable/test.sh
-git diff --check
-```
-
-### Docker 镜像
-
 核心 Action：
 
 ```text
