@@ -81,20 +81,19 @@ probe
 
 # Check available predecessor SQL upgrade paths against the new binary.
 createdb sql_upgrade
-for extension in pg_duckdb; do
-  # Select the newest installable predecessor that has an upgrade path.
-  previous=$("${psql[@]}" -At -c "
+extension=pg_duckdb
+# Select the newest installable predecessor that has an upgrade path.
+previous=$("${psql[@]}" -At -c "
     SELECT p.source FROM pg_extension_update_paths('$extension') p
     JOIN pg_available_extension_versions v ON v.name='$extension' AND v.version=p.source
     JOIN pg_available_extensions a ON a.name='$extension' AND a.default_version=p.target
     WHERE p.path IS NOT NULL AND p.source ~ '^[0-9]+[.][0-9]+[.][0-9]+$'
       AND string_to_array(p.source, '.')::int[] < string_to_array(p.target, '.')::int[]
     ORDER BY string_to_array(p.source, '.')::int[] DESC LIMIT 1")
-  if [[ -z "$previous" ]]; then echo "No testable predecessor SQL for $extension" >&2; exit 1; fi
-  "${psql[@]}" -d sql_upgrade -v extension="$extension" -v previous="$previous" <<'SQL'
+if [[ -z "$previous" ]]; then echo "No testable predecessor SQL for $extension" >&2; exit 1; fi
+"${psql[@]}" -d sql_upgrade -v extension="$extension" -v previous="$previous" <<'SQL'
 CREATE EXTENSION :"extension" VERSION :'previous';
 ALTER EXTENSION :"extension" UPDATE;
 SQL
-done
 [[ $("${psql[@]}" -At -d sql_upgrade -c "SELECT count(*) FROM pg_extension e JOIN pg_available_extensions a ON a.name=e.extname WHERE e.extname='pg_duckdb' AND e.extversion=a.default_version") == 1 ]]
 echo 'Portable extension lifecycle checks passed without Nix.'
