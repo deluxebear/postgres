@@ -14,36 +14,32 @@ If you already have the official Nix installer (not Determinate Systems) install
 
 ### Step 1: Edit /etc/nix/nix.conf
 
-Add or update the following configuration in `/etc/nix/nix.conf`:
+Extend the following configuration in `/etc/nix/nix.conf`:
 
-```
-allowed-users = *
-always-allow-substitutes = true
-auto-optimise-store = false
-build-users-group = nixbld
-builders-use-substitutes = true
-cores = 0
+```conf
 experimental-features = nix-command flakes
-max-jobs = auto
-require-sigs = true
-substituters = https://cache.nixos.org https://nix-postgres-artifacts.s3.amazonaws.com https://postgrest.cachix.org https://cache.nixos.org/
-trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-postgres-artifacts:dGZlQOvKcNEjvT7QEAJbcV6b6uk7VF/hWMjhYleiaLI= postgrest.cachix.org-1:icgW4R15fz1+LqvhPjt4EnX/r19AaqxiVV+1olwlZtI= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
-trusted-users = YOUR_USERNAME root
+extra-substituters = https://nix-postgres-artifacts.s3.amazonaws.com
+extra-trusted-public-keys = nix-postgres-artifacts:dGZlQOvKcNEjvT7QEAJbcV6b6uk7VF/hWMjhYleiaLI=
 ```
 
-**Important**: Replace `YOUR_USERNAME` with your actual username in the `trusted-users` line.
+> [!CAUTION]
+> DO NOT add anyone to `trusted-users` in `/etc/nix/nix.conf` as it [grants root without password](https://nix.dev/manual/nix/stable/command-ref/conf-file.html#conf-trusted-users). Instead, add the binary cache to `extra-substituters` and `extra-trusted-public-keys`.
+
+Read about the binary cache in [/nix/docs/binary-cache.md](/nix/docs/binary-cache.md).
 
 ### Step 2: Restart the Nix Daemon
 
 After updating the configuration, restart the Nix daemon:
 
 **On macOS:**
+
 ```bash
 sudo launchctl stop org.nixos.nix-daemon
 sudo launchctl start org.nixos.nix-daemon
 ```
 
 **On Linux (systemd):**
+
 ```bash
 sudo systemctl restart nix-daemon
 ```
@@ -52,36 +48,34 @@ Your Nix installation is now configured with the proper build caches and should 
 
 ## Install Nix (Fresh Installation)
 
-We'll use the official Nix installer with a custom configuration that includes our build caches and settings. This works on many platforms, including **aarch64 Linux**, **x86_64 Linux**, and **macOS**.
+We'll use the official Nix installer (see also [nix.dev](https://nix.dev/install-nix)) with a custom configuration that includes our build caches and settings. This works on many platforms, including **aarch64 Linux**, **x86_64 Linux**, and **macOS**.
 
 ### Step 1: Create nix.conf
 
-First, create a file named `nix.conf` with the following content:
+First, create a file named `nix.conf.extra` with the following content:
 
-```
-allowed-users = *
-always-allow-substitutes = true
-auto-optimise-store = false
-build-users-group = nixbld
-builders-use-substitutes = true
-cores = 0
+```conf
 experimental-features = nix-command flakes
-max-jobs = auto
-require-sigs = true
-substituters = https://cache.nixos.org https://nix-postgres-artifacts.s3.amazonaws.com https://postgrest.cachix.org https://cache.nixos.org/
-trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-postgres-artifacts:dGZlQOvKcNEjvT7QEAJbcV6b6uk7VF/hWMjhYleiaLI= postgrest.cachix.org-1:icgW4R15fz1+LqvhPjt4EnX/r19AaqxiVV+1olwlZtI= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
-trusted-users = YOUR_USERNAME root
+extra-substituters = https://nix-postgres-artifacts.s3.amazonaws.com
+extra-trusted-public-keys = nix-postgres-artifacts:dGZlQOvKcNEjvT7QEAJbcV6b6uk7VF/hWMjhYleiaLI=
 ```
 
-**Important**: Replace `YOUR_USERNAME` with your actual username in the `trusted-users` line.
+> [!CAUTION]
+> DO NOT add anyone to `trusted-users` in `/etc/nix/nix.conf` as it [grants root without password](https://nix.dev/manual/nix/stable/command-ref/conf-file.html#conf-trusted-users). Instead, add the binary cache to `extra-substituters` and `extra-trusted-public-keys`.
 
-### Step 2: Install Nix 2.34.6
+Read about the binary cache in [/nix/docs/binary-cache.md](/nix/docs/binary-cache.md).
 
-Run the following command to install Nix 2.34.6 (the version used in CI) with the custom configuration:
+### Step 2: Install Nix
+
+Run the following command to install the Nix version used in CI (pinned in `.github/actions/install-nix/setup-nix.sh`) with the custom configuration:
 
 ```bash
-curl -L https://releases.nixos.org/nix/nix-2.34.6/install | sh -s -- --daemon --yes --nix-extra-conf-file ./nix.conf
+curl -fsSL https://releases.nixos.org/nix/nix-2.35.3/install -o nix-install
+echo "69d0fe8fba8fe88f94c98b09964691ac9950abc7ecbf2ba861dc0533cfd901e9  nix-install" | sha256sum -c -
+sh nix-install --daemon --yes --nix-extra-conf-file ./nix.conf
 ```
+
+The checksum check makes sure the installer script is the one we pinned. On macOS, use `shasum -a 256 -c -` instead of `sha256sum -c -`.
 
 This will install Nix with our build caches pre-configured, which should eliminate substituter-related errors.
 
@@ -91,7 +85,7 @@ the Nix tools installed on `$PATH` and so that your user shell can see the
 extra settings.
 
 You should now be able to do something like the following; try running these
-same commands on your machine:
+same commands on your machine. Your versions are likely different from the ones shown:
 
 ```
 $ nix --version
@@ -109,26 +103,25 @@ $ nix run nixpkgs#nix-info -- -m
  - nixpkgs: `/nix/var/nix/profiles/per-user/root/channels/nixpkgs`
 ```
 
-If the above worked, you're now cooking with gas!
+If that worked, you're ready to build.
 
-## Do some fun stuff
+## Take Nix for a spin
 
-One of the best things about Nix that requires _very little_ knowledge of it is
-that it lets you install the latest and greatest versions of many tools _on any
-Linux distribution_. We'll explain more about that later on. But just as a few
-examples:
+Nix gives you current versions of many tools on any Linux distribution or macOS, and you need very little Nix knowledge to try it. `nix run` fetches a tool and runs it once. Nothing stays on your `$PATH`.
 
-- **Q**: I want the latest version of Deno. Can we get that?
-- **A**: `nix profile install nixpkgs#deno`, and you're done!
+- **Q**: Want the latest Deno?
+- **A**: `nix run nixpkgs#deno -- --version`
 
 <!-- break bulletpoints -->
 
-- **Q**: What about HTTPie? A nice Python application?
-- **A**: Same idea: `nix profile install nixpkgs#httpie`
+- **Q**: A nice Python application like HTTPie?
+- **A**: `nix run nixpkgs#httpie -- --version`
 
 <!-- break bulletpoints -->
 
-- **Q**: What about my favorite Rust applications, like ripgrep and bat?
-- **A.1**: `nix profile install nixpkgs#ripgrep`
-- **A.2**: `nix profile install nixpkgs#bat`
-- **A.3**: And yes, you also have exa, fd, hyperfine, and more!
+- **Q**: Favorite Rust tools like ripgrep and bat?
+- **A**: `nix run nixpkgs#ripgrep -- --version` and `nix run nixpkgs#bat -- --version`. fd, hyperfine, and eza are there too.
+
+> **Note**: `nix profile` installs the binaries so you do not need to `nix run` them each time, however this is not recommended. If curious about its use please consult your nearest nix mentor/advanced user.
+
+To learn more about Nix, see [Zero to Nix](https://zero-to-nix.com).

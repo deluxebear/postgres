@@ -1,12 +1,9 @@
 { pkgs, lib, ... }:
 let
-  # Use Go 1.24 for the scanner which requires Go >= 1.23.2
-  go124 = pkgs.go_1_24;
-  buildGoModule124 = pkgs.buildGoModule.override { go = go124; };
-
   # Package GOSS - server validation spec runner
   goss = pkgs.buildGoModule rec {
     pname = "goss";
+    # renovate: datasource=github-tags depName=goss packageName=goss-org/goss extractVersion=^v(?<version>.+)$
     version = "0.4.8";
     src = pkgs.fetchFromGitHub {
       owner = "goss-org";
@@ -28,7 +25,7 @@ let
   };
 
   # Main supascan CLI - consolidated tool for baseline generation and validation
-  supascan = buildGoModule124 {
+  supascan = pkgs.buildGoModule {
     pname = "supascan";
     version = "1.0.0";
 
