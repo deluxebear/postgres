@@ -4,6 +4,12 @@ on:
   push:
     branches:
       - custom-extensions
+    # Portable CLI workflow, tests and documentation do not change Docker packages.
+    paths-ignore:
+      - '.github/workflows/cli-release.yml'
+      - 'scripts/portable/**'
+      - 'tests/test_portable_release.py'
+      - '**/*.md'
   workflow_dispatch:
     inputs:
       build_docker:
