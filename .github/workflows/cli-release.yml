@@ -19,6 +19,10 @@ on:
         description: "Validation only: reuse all three compiled artifacts from an earlier run (requires publish=false)"
         type: string
         default: ""
+      publish_run_id:
+        description: "Publish only: recover publication from a successful full build/test run in this repository"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -31,7 +35,7 @@ concurrency:
 jobs:
   prepare:
     name: Discover stable releases and prepare source
-    if: github.event_name != 'workflow_dispatch' || inputs.artifact_run_id == ''
+    if: github.event_name != 'workflow_dispatch' || (inputs.artifact_run_id == '' && inputs.publish_run_id == '')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
@@ -325,7 +329,7 @@ jobs:
   publish:
     name: Publish portable GitHub release
     needs: [prepare, verify-release]
-    if: github.event_name == 'schedule' || (inputs.publish && inputs.artifact_run_id == '')
+    if: always() && needs.prepare.result == 'success' && needs.verify-release.result == 'success' && (github.event_name == 'schedule' || (inputs.publish && inputs.artifact_run_id == '' && inputs.publish_run_id == ''))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -384,3 +388,64 @@ jobs:
           gh release upload "$tag" artifacts/*.tar.gz artifacts/*.sha256 artifacts/*.extensions.json --clobber
           gh release edit "$tag" --draft=false --latest=false
           gh release view "$tag" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
+
+  recover-publish:
+    name: Publish previously verified full build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_run_id != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout publishing scripts
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Verify successful full build and all three runtime tests
+        id: original
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SOURCE_RUN: ${{ inputs.publish_run_id }}
+          PUBLISH: ${{ inputs.publish }}
+          RETEST_RUN: ${{ inputs.artifact_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$PUBLISH" == true && -z "$RETEST_RUN" && "$SOURCE_RUN" =~ ^[0-9]+$ ]]
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" > original-run.json
+          jq -e --arg repo "$GH_REPO" '
+            .head_repository.full_name == $repo and .status == "completed" and .conclusion == "success"
+            and .path == ".github/workflows/cli-release.yml"
+            and (.event == "workflow_dispatch" or .event == "schedule")
+          ' original-run.json
+          gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN/jobs?per_page=100" > original-jobs.json
+          for arch in linux-x64 linux-arm64 darwin-arm64; do
+            jq -e --arg name "Build $arch" 'any(.jobs[]; .name == $name and .conclusion == "success")' original-jobs.json
+            jq -e --arg name "Test $arch without Nix" 'any(.jobs[]; .name == $name and .conclusion == "success")' original-jobs.json
+          done
+          jq -e 'any(.jobs[]; .name == "Verify release inventory and notes" and .conclusion == "success")' original-jobs.json
+          echo "sha=$(jq -r .head_sha original-run.json)" >> "$GITHUB_OUTPUT"
+          shellcheck scripts/portable/publish.sh
+          python3 -m unittest discover -s tests -p test_portable_release.py
+      - name: Download exact tested source
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: portable-source
+          run-id: ${{ inputs.publish_run_id }}
+          github-token: ${{ github.token }}
+          path: prepared
+      - name: Download exact tested packages and inventories
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: portable-binary-*
+          run-id: ${{ inputs.publish_run_id }}
+          github-token: ${{ github.token }}
+          merge-multiple: true
+          path: artifacts
+      - name: Publish and verify all public assets and notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EXPECTED_WORKFLOW_SHA: ${{ steps.original.outputs.sha }}
+        run: bash scripts/portable/publish.sh
