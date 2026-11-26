@@ -25,10 +25,11 @@ let
   flavor = builtins.getEnv "PG_DURABLE_TEST_FLAVOR";
   flake = builtins.getFlake "path:${root}";
   system = builtins.currentSystem;
-  pkgs = import flake.inputs.nixpkgs {
-    inherit system;
-    overlays = [ (import flake.inputs.rust-overlay) ];
-  };
+  projectModule = import (root + "/nix/nixpkgs.nix") { inputs = flake.inputs; };
+  projectPkgs = (projectModule.perSystem { inherit system; })._module.args.pkgs;
+  pkgs = projectPkgs.extend (final: _prev: {
+    rust-bin = flake.inputs.rust-overlay.lib.mkRustBin { } final;
+  });
   postgresql = flake.packages.${system}."postgresql_${flavor}";
   durable = pkgs.callPackage (root + "/nix/ext/pg_durable-ci-previous.nix") {
     inherit postgresql;
