@@ -7,7 +7,7 @@
 | 扩展 | 当前版本 | 上游地址 | 接入范围 | 是否预加载 | 说明 |
 | --- | --- | --- | --- | --- | --- |
 | `pg_durable` | `0.2.9` | `https://github.com/microsoft/pg_durable` | `psql_17`、`psql_17_slim`、`psql_orioledb-17`、`psql_orioledb-17_slim` | 是，追加 `pg_durable` | Durable SQL Functions for PostgreSQL。上游明确支持 PG17/PG18；本仓库将其作为标准 PG17 和 OrioleDB17 共享扩展构建。 |
-| `pg_duckdb` | `1.1.1` | `https://github.com/duckdb/pg_duckdb` | `psql_17`、`psql_17_slim` | 是，追加 `pg_duckdb` | DuckDB Embedded in Postgres。当前只接入标准 PG17；暂不接入 OrioleDB17，因为 OrioleDB 的 `TableAmRoutine` ABI 与标准 PostgreSQL 17 不兼容。 |
+| `pg_duckdb` | `1.2.2` | `https://github.com/duckdb/pg_duckdb` | `psql_17`、`psql_17_slim` | 是，追加 `pg_duckdb` | DuckDB Embedded in Postgres。当前只接入标准 PG17；暂不接入 OrioleDB17，因为 OrioleDB 的 `TableAmRoutine` ABI 与标准 PostgreSQL 17 不兼容。 |
 
 ### 当前版本说明
 
@@ -17,7 +17,11 @@
 - 2026-10-12 已通过 [GitHub Actions 验证](https://github.com/deluxebear/postgres/actions/runs/38158866754) 完成标准 PG17 `17.11.0.004` 与 OrioleDB17 `17.11.0.004-orioledb` 的 amd64/arm64 原生 Nix 构建、全新安装及真实二进制升级测试：使用 `0.2.8` 创建数据库并执行工作流，重启到 `0.2.9` 后执行 `ALTER EXTENSION UPDATE`，确认原有函数 OID、已完成工作流结果、新 HTTP 接口和后续工作流执行均正常。测试不覆盖升级时仍在运行的历史回放。本次仅验证构建，未发布 Docker 镜像或 GitHub Release；下方已发布镜像的验证记录仍对应 `0.2.8`。
 - 升级到 `0.2.8` 前，应先清空已在第 100,000 次迭代记录旧终止失败路径且要求连续回放的长循环；这类执行历史不能在新的 8,388,608 次循环上限下重放。
 - 从 `0.2.5` 或更早版本升级时，应检查是否存在依赖未公开函数 `df.ensure_durofut(text)` 的自定义对象；该函数已在 `0.2.6` 移除。应用不应持久化内部 `Durofut` JSON envelope 后跨版本回放。
-- `pg_duckdb 1.1.1` 仍是官方 GitHub 最新稳定源码版本，因此本次不改变其 pin 或接入范围。该上游 release 的 `pg_duckdb.control` 仍声明 SQL 扩展版本 `1.1.0`，且没有提供 `1.1.0--1.1.1.sql`；因此镜像中的 Nix 包路径是 `pg_duckdb-1.1.1`，PostgreSQL `extversion` 仍会显示 `1.1.0`，这是上游版本设计而非旧源码残留。
+- `pg_duckdb 1.2.2` 发布于 2026-11-23，内嵌 DuckDB `2.0.1`，SQL 扩展版本为 `1.2.2`。本次源码、DuckDB 子模块和 httpfs 均按该标签固定并校验 SHA-256。构建使用上游 `ReleaseStaticSystem` 模式，静态链接 DuckDB/httpfs，并使用 Nix 提供的 curl/OpenSSL。见 [上游 release](https://github.com/duckdb/pg_duckdb/releases/tag/v1.2.2)。
+- 从旧包 `1.1.1` 升级时，数据库中的旧 SQL 版本为 `1.1.0`。安装新二进制并重启后，在每个已安装扩展的数据库中执行 `ALTER EXTENSION pg_duckdb UPDATE TO '1.2.2';`。上游提供连续的 `1.1.0 → 1.2.0 → 1.2.1 → 1.2.2` 升级脚本。
+- `1.2` 系列新增非 public schema 安装、`read_vortex`、`read_text`、`read_blob` 和 `duckdb.variant`，并调整 `iceberg_snapshots` 的返回类型。升级前检查依赖该函数及其返回类型的自定义对象，升级脚本会删除并重建它们。MotherDuck、远程存储和额外下载的 DuckDB 扩展需要各自验证服务及版本兼容性。见 [SQL 升级脚本](https://github.com/duckdb/pg_duckdb/blob/v1.2.2/sql/pg_duckdb--1.1.0--1.2.0.sql)。
+- `scripts/test-pg-duckdb-upgrade.sh` 覆盖 SQL 升级、非 public schema 全新安装、heap 表聚合、内嵌引擎版本、httpfs 加载和 dump/restore，并接入标准 PG17 的 amd64/arm64 发布构建。该脚本使用新版二进制验证旧 SQL 对象的升级路径，2026-11-26 已在本机 Linux ARM64 容器中完成标准 PG17 17.6 的 Nix 源码构建和该脚本验证，另以旧版 1.1.1 二进制创建数据后重启到新版，确认升级成功且旧表聚合结果正确。amd64 构建及完整发布镜像仍待 CI 验证。
+- 最新 Supabase `17.12.0.005` 基线的完整包评估存在独立阻塞。现有定制补丁覆盖 `nix/packages/postgres.nix` 后，pgroonga 缺少 `mecab-naist-jdic` 参数，且该文件仍沿用旧 PostgreSQL 包入口。当前 ARM64 扩展验证基于本分支的标准 PG17 包，发布前需同步上游打包接口并重新验证完整镜像。
 - `pg_durable` 的 Cargo 依赖通过 crates.io 官方静态下载地址获取，避开 API 下载端点的 HTTP 403；仍使用上游 `Cargo.lock` 中的固定版本和 SHA-256 校验和。
 - 2026-09-13 已通过 [GitHub Actions 定向重建](https://github.com/deluxebear/postgres/actions/runs/34705317456) 完成标准 PG17 `17.6.1.171` 与 OrioleDB17 `17.9.0.024-orioledb` 的 amd64/arm64 Nix 构建、Docker 推送、多架构 manifest 和 GitHub Release 更新（[标准版 Release](https://github.com/deluxebear/postgres/releases/tag/postgres-17.6.1.171)、[OrioleDB 版 Release](https://github.com/deluxebear/postgres/releases/tag/postgres-17.9.0.024-orioledb)）。镜像 `deluxebear/postgres:17.6.1.171` 的 manifest digest 为 `sha256:416ba1fe084c6bb942ee73a5e47b679458e0b28d7349d2728269502574bfc519`，`deluxebear/postgres:17.9.0.024-orioledb` 的 manifest digest 为 `sha256:70646a3b1fbc0aba472ba331d4e5d9c6b2c580c7515ac972a41cb3d63cadd072`。直接检查 ARM64 镜像确认两者均包含 Nix 包 `pg_durable-0.2.8`、`pg_durable.control` 默认版本 `0.2.8` 和升级脚本 `pg_durable--0.2.7--0.2.8.sql`；数据库运行时也已分别通过全新安装，以及复用 `0.2.7` 数据目录后执行 `ALTER EXTENSION pg_durable UPDATE TO '0.2.8'` 的原地升级验证。
 
@@ -115,7 +119,7 @@ psql_orioledb-17
 psql_orioledb-17_slim
 ```
 
-例如：`pg_duckdb v1.1.1` 可以编入标准 PG17，但当前不能直接编入 OrioleDB17，因为 OrioleDB 的 `TableAmRoutine` ABI 和标准 PostgreSQL 17 不一致；`pg_durable` 当前继续作为共享扩展编入两类 PG17 构建。
+例如：`pg_duckdb v1.2.2` 可以编入标准 PG17，但当前不能直接编入 OrioleDB17，因为 OrioleDB 的 `TableAmRoutine` ABI 和标准 PostgreSQL 17 不一致；`pg_durable` 当前继续作为共享扩展编入两类 PG17 构建。
 
 3. 如果扩展需要预加载，追加到 `shared_preload_libraries`，不要覆盖已有值。
 

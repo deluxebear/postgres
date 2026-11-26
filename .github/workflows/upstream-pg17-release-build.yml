@@ -277,6 +277,11 @@ jobs:
             fi
           done
 
+      - name: Validate pg_duckdb installation, SQL upgrade and restore
+        if: matrix.release.flavor == '17'
+        working-directory: upstream
+        run: bash ../.workflow/scripts/test-pg-duckdb-upgrade.sh result
+
       - name: Validate pg_durable installation and SQL upgrade
         working-directory: upstream
         run: |

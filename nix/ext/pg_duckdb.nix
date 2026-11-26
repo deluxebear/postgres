@@ -16,21 +16,21 @@
 
 let
   pname = "pg_duckdb";
-  version = "1.1.1";
+  version = "1.2.2";
 
   src = fetchurl {
     url = "https://github.com/duckdb/pg_duckdb/archive/refs/tags/v${version}.tar.gz";
-    hash = "sha256-F2O9RgsxyfM7Ht8Lu8UN2P9bj6ClZtBTJG7Ouy2mrNk=";
+    hash = "sha256-53ez3z87qbuHKfaK0pAB7itO5T9WvRXVU5qpirCydWo=";
   };
 
   duckdbSrc = fetchurl {
-    url = "https://github.com/duckdb/duckdb/archive/d1dc88f950d456d72493df452dabdcd13aa413dd.tar.gz";
-    hash = "sha256-dRHh9QnOnBCpXArli8RVHUsBWx3FZk9FN7L24SDEyR8=";
+    url = "https://github.com/duckdb/duckdb/archive/8d78114e90a53823803660bf821f6073ac87da8c.tar.gz";
+    hash = "sha256-CbXHdXtBQn2jjwAdgPtRcm3v/pNnz/kqySIQ2Lvrfb4=";
   };
 
   httpfsSrc = fetchurl {
-    url = "https://github.com/duckdb/duckdb-httpfs/archive/9c7d34977b10346d0b4cbbde5df807d1dab0b2bf.tar.gz";
-    hash = "sha256-2Ttof3k+Z038+deETI5yZRJucIQ4mXvuTuAcMvtBKAM=";
+    url = "https://github.com/duckdb/duckdb-httpfs/archive/f71cfdb4bff85b9e15b1f3b842d9aa395aff0167.tar.gz";
+    hash = "sha256-6jXqOLs0YNxsYDuMRn0GXp7L91beG+JlmMV8UmoO0j4=";
   };
 
   extension = stdenv.mkDerivation {
@@ -64,14 +64,9 @@ let
       mkdir -p third_party/duckdb-httpfs
       tar -xzf ${httpfsSrc} --strip-components=1 -C third_party/duckdb-httpfs
 
-      cat > third_party/pg_duckdb_extensions.cmake <<'EOF'
-      duckdb_extension_load(json)
-      duckdb_extension_load(icu)
-      duckdb_extension_load(httpfs
-          SOURCE_DIR ''${CMAKE_CURRENT_LIST_DIR}/duckdb-httpfs
-          EXTENSION_VERSION 9c7d34977b
-      )
-      EOF
+      substituteInPlace third_party/pg_duckdb_extensions.cmake \
+        --replace-fail 'GIT_URL https://github.com/duckdb/duckdb-httpfs' 'SOURCE_DIR ''${CMAKE_CURRENT_LIST_DIR}/duckdb-httpfs' \
+        --replace-fail 'GIT_TAG f71cfdb4bff85b9e15b1f3b842d9aa395aff0167' 'EXTENSION_VERSION f71cfdb4bf'
 
       mkdir -p .git/modules/third_party/duckdb
       touch .git/modules/third_party/duckdb/HEAD
@@ -79,7 +74,8 @@ let
 
     makeFlags = [
       "PG_CONFIG=${postgresql}/bin/pg_config"
-      "DUCKDB_BUILD=ReleaseStatic"
+      "PG_DUCKDB_VERSION=v${version}"
+      "DUCKDB_BUILD=ReleaseStaticSystem"
       "DUCKDB_GEN=ninja"
       "DUCKDB_DISABLE_ASSERTIONS=1"
     ];
