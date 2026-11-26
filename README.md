@@ -174,14 +174,7 @@ gh workflow run cli-release.yml --ref custom-extensions \
 
 定时任务需要此 workflow 存在于仓库默认分支，并在 Actions 设置中启用。Linux 包以 Ubuntu 24.04 为无 Nix 验证环境，仍依赖宿主 glibc，不适用于原生 Alpine/musl。解压后可通过 `bin/initdb`、`bin/pg_ctl` 和 `bin/psql` 管理数据库；生产部署的用户、数据目录、认证、密钥管理及 systemd 服务需另行配置。
 
-发布自动化的本地检查：
-
-```bash
-python3 -m unittest discover -s tests -p test_portable_release.py
-actionlint .github/workflows/cli-release.yml
-shellcheck scripts/portable/test.sh
-git diff --check
-```
+此流程的验证统一在 GitHub Actions 上执行：源码准备任务运行发布逻辑单元测试和 Shell 静态检查，随后执行三个平台的原生构建与无 Nix 运行测试。开发时通过 `publish=false` 触发完整验证，不在本机进行构建或运行验证。
 
 ### Docker 镜像
 
