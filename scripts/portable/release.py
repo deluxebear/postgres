@@ -27,6 +27,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parents[2]
 CLI_TAG = re.compile(r"v?17\.(\d+)\.(\d+)\.(\d+)-cli")
 EXT_TAG = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
+CUSTOM_TAG = re.compile(r"postgres-17\.(\d+)\.(\d+)\.(\d+)-cli")
 UNSTABLE = re.compile(r"test|alpha|beta|preview|nightly|canary|\brc\d*\b|development", re.I)
 
 
@@ -90,8 +91,23 @@ def discover(repo, ref=None, force=False):
         existing = None
     if existing and not existing["draft"] and not force:
         return {"has_work": False, "release_tag": tag}
+    predecessor = None
+    previous = releases(repo, CUSTOM_TAG)
+    target = tuple(map(int, CLI_TAG.fullmatch(upstream["tag_name"]).groups()))
+    previous = [r for r in previous if CUSTOM_TAG.fullmatch(r["tag_name"])
+                and tuple(map(int, CUSTOM_TAG.fullmatch(r["tag_name"]).groups())) <= target]
+    if previous:
+        try:
+            selected = latest_stable(previous, CUSTOM_TAG)
+        except ValueError:
+            selected = None
+        if selected:
+            predecessor = {"tag": selected["tag_name"], "url": selected["html_url"],
+                           "assets": [{"name": a["name"], "url": a["browser_download_url"]}
+                                      for a in selected["assets"]]}
     return {
         "has_work": True, "release_tag": tag,
+        "predecessor": predecessor,
         "upstream": describe("supabase/postgres", upstream),
         "extensions": {
             name: describe(owner, latest_stable(releases(owner, EXT_TAG), EXT_TAG))
@@ -262,7 +278,7 @@ def patch_checkout(plan, checkout):
         raise ValueError("Expected one preload setting")
     config.write_text(text)
     # Keep validation scripts alongside the exact source snapshot.
-    for filename in ("release.py", "test.sh", "inventory.py"):
+    for filename in ("release.py", "test.sh", "inventory.py", "previous.py", "upgrade.sh"):
         destination = checkout / "scripts/portable" / filename
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / "scripts/portable" / filename, destination)
@@ -342,8 +358,10 @@ def notes(plan, inventories):
               "- 解压后使用 `bin/initdb`、`bin/pg_ctl` 和 `bin/psql`；运行时无需 Docker 或 Nix。",
               "- Linux 包依赖宿主 glibc；验证环境为 Ubuntu 24.04，不适用于原生 Alpine/musl。",
               "- 配置模板已追加 `pg_duckdb`、`pg_durable` 预加载项；安装 SQL 扩展仍需执行 `CREATE EXTENSION`。",
-              "- 三平台均通过无 Nix 环境中的初始化、扩展安装、查询、工作流执行、重启、dump/restore 和 SQL 升级路径检查。",
-              "- 升级检查使用新二进制安装随包可安装的前序 SQL 版本后升级；不代表旧二进制或运行中工作流的跨版本兼容性保证。",
+              "- 三平台均通过无 Nix 环境中的初始化、扩展安装、查询、工作流执行、重启、dump/restore 和 pg_duckdb SQL 升级路径检查。",
+              (f'- 已验证从 [{plan["predecessor"]["tag"]}]({plan["predecessor"]["url"]}) 的真实便携二进制升级，包含旧数据和已完成 durable 工作流结果。'
+               if plan.get("predecessor") else "- 首次发布，没有此前包含这两个扩展的定制便携包，未执行跨包二进制升级验证。"),
+              "- 不保证升级时仍在运行的 durable 工作流能够跨版本回放。",
               "- `portable-release.json` 记录源码、子模块与哈希；`extensions.json` 列出全部 SQL 扩展版本。", ""]
     return "\n".join(lines)
 

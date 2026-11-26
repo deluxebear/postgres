@@ -3,6 +3,8 @@ import importlib.util
 import json
 from pathlib import Path
 import shutil
+import io
+import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -71,6 +73,17 @@ class StableReleaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 release.discover("owner/repo", "v17.12.0.005-cli")
 
+    def test_resolves_extensions_and_real_predecessor(self):
+        old = item("postgres-17.12.0.004-cli", assets=[])
+        absent = urllib.error.HTTPError("url", 404, "not found", {}, None)
+        with patch.object(release, "releases", side_effect=[
+                [item("v17.12.0.005-cli")], [old], [item("v1.2.2")], [item("v0.2.9")]]), \
+             patch.object(release, "api", side_effect=absent), \
+             patch.object(release, "describe", side_effect=lambda repo, r: {"tag": r["tag_name"]}):
+            resolved = release.discover("owner/repo")
+            self.assertEqual(resolved["predecessor"]["tag"], old["tag_name"])
+            self.assertEqual(resolved["extensions"]["pg_duckdb"]["tag"], "v1.2.2")
+
 
 class SourceTests(unittest.TestCase):
     def test_patches_only_cli_set_and_dynamic_pins(self):
@@ -98,6 +111,18 @@ class SourceTests(unittest.TestCase):
     def test_packaging_drift_stops_preparation(self):
         with self.assertRaises(ValueError):
             release.replace_once("changed upstream", "cliExtensions = [", "replacement")
+
+    def test_sql_versions_can_differ_from_release_versions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "source.tar.gz"
+            with tarfile.open(archive, "w:gz") as output:
+                for name, value in (("pg_duckdb", "1.1.0"), ("pg_durable", "@CARGO_VERSION@")):
+                    data = f"default_version = '{value}'\n".encode()
+                    entry = tarfile.TarInfo(f"source/{name}.control")
+                    entry.size = len(data)
+                    output.addfile(entry, io.BytesIO(data))
+            self.assertEqual(release.sql_version(archive, "pg_duckdb", "1.1.1"), "1.1.0")
+            self.assertEqual(release.sql_version(archive, "pg_durable", "0.2.9"), "0.2.9")
 
 
 class NotesTests(unittest.TestCase):

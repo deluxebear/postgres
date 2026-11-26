@@ -154,7 +154,7 @@ docker/pgctld/orioledb-postgresql.conf.tmpl
 
 每次构建都从官方 GitHub Releases 解析 `pg_duckdb` 和 `pg_durable` 的最新稳定版本，固定 release tag、commit、源码 SHA-256、DuckDB/httpfs 子模块及 Cargo.lock。动态版本只写入当次上游源码快照，不修改当前 Docker/Nix 包的版本固定值。如果上游构建布局、PostgreSQL 支持或 pgrx/Rust 工具链不兼容，任务失败并停止发布，不退回旧扩展版本。新增 pgrx/Rust 组合需要先在项目的 `nix/cargo-pgrx/versions.json` 中维护并验证支持。
 
-沿用上游的三个原生构建目标：Linux x64、Linux ARM64、macOS ARM64。保留 CLI 精简扩展，并加入 `pg_duckdb` 和 `pg_durable`；配置模板保留已有预加载库并追加这两个库。打包后在独立的无 `/nix/store` runner 上验证重定位、初始化、扩展安装、DuckDB 查询与 httpfs 加载、durable 工作流执行、重启、dump/restore 和随包可安装的前序 SQL 版本升级。SQL 升级测试使用新版二进制，不代表旧二进制或运行中 durable 工作流的跨版本回放验证。
+沿用上游的三个原生构建目标：Linux x64、Linux ARM64、macOS ARM64（使用当前支持的 `macos-15` runner）。保留 CLI 精简扩展，并加入 `pg_duckdb` 和 `pg_durable`；配置模板保留已有预加载库并追加这两个库。打包后在独立的无 `/nix/store` runner 上验证重定位、初始化、扩展安装、DuckDB 查询与 httpfs 加载、durable 工作流执行、重启、dump/restore 和 pg_duckdb 随包可安装的前序 SQL 版本升级。已有定制便携版 release 时，还会下载并校验对应平台的前版包，用真实旧二进制创建数据和执行 durable 工作流，再切换新二进制升级两个扩展，验证数据、已完成结果及新工作流；首次发布没有前版包时明确记录未执行该项。不保证升级时仍在运行的 durable 工作流能够跨版本回放。
 
 发布 tag 示例为 `postgres-17.12.0.005-cli`，指向实际构建的定制上游源码快照；不覆盖已有 tag 或完成的 release。全部平台通过后才上传草稿并正式发布。附件包括各平台 `.tar.gz`、`.sha256` 和 `.extensions.json`；包内的 `portable-release.json` 记录源码和依赖哈希。Release 说明包含两个定制扩展的版本、官方 release 链接，以及从实际 `.control` 文件提取的全部随包 SQL 扩展默认版本。三平台扩展版本或来源不一致时停止发布。
 

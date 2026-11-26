@@ -81,7 +81,7 @@ probe
 
 # Check available predecessor SQL upgrade paths against the new binary.
 createdb sql_upgrade
-for extension in pg_duckdb pg_durable; do
+for extension in pg_duckdb; do
   # Select the newest installable predecessor that has an upgrade path.
   previous=$("${psql[@]}" -At -c "
     SELECT p.source FROM pg_extension_update_paths('$extension') p
@@ -96,5 +96,5 @@ CREATE EXTENSION :"extension" VERSION :'previous';
 ALTER EXTENSION :"extension" UPDATE;
 SQL
 done
-[[ $("${psql[@]}" -At -d sql_upgrade -c "SELECT count(*) FROM pg_extension e JOIN pg_available_extensions a ON a.name=e.extname WHERE e.extname IN ('pg_duckdb','pg_durable') AND e.extversion=a.default_version") == 2 ]]
+[[ $("${psql[@]}" -At -d sql_upgrade -c "SELECT count(*) FROM pg_extension e JOIN pg_available_extensions a ON a.name=e.extname WHERE e.extname='pg_duckdb' AND e.extversion=a.default_version") == 1 ]]
 echo 'Portable extension lifecycle checks passed without Nix.'

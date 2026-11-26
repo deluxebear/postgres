@@ -40,8 +40,9 @@ jobs:
         working-directory: .workflow
         run: |
           python3 -m unittest discover -s tests -p test_portable_release.py
-          shellcheck scripts/portable/test.sh
+          shellcheck scripts/portable/test.sh scripts/portable/upgrade.sh
           bash -n scripts/portable/test.sh
+          bash -n scripts/portable/upgrade.sh
       - name: Discover latest stable upstream and extension releases
         id: discover
         env:
@@ -197,6 +198,13 @@ jobs:
           tar -xzf ./*.tar.gz -C ../relocated
       - name: Validate extension installation, execution, upgrade, restart and restore
         run: bash scripts/portable/test.sh relocated/*
+      - name: Validate upgrade from previous published portable binaries
+        run: |
+          set -euo pipefail
+          python3 scripts/portable/previous.py relocated/* previous
+          if [[ -d previous ]]; then
+            bash scripts/portable/upgrade.sh relocated/* previous/*
+          fi
 
   publish:
     name: Publish portable GitHub release
