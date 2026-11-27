@@ -1,0 +1,23 @@
+name: Portable installer checks (no build)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check installer without installing or building PostgreSQL
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+      - name: Check Bash syntax and ShellCheck
+        run: |
+          bash -n scripts/portable/install.sh
+          shellcheck scripts/portable/install.sh
+      - name: Check parameters, privilege guard and mocked release downloads
+        run: python3 -m unittest discover -s tests -p test_portable_installer.py

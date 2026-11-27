@@ -187,6 +187,35 @@ gh workflow run cli-release.yml --ref custom-extensions \
 
 #### Linux 服务器安装与启动
 
+**一键安装（首次部署）。** 仓库提供独立的 [`scripts/portable/install.sh`](scripts/portable/install.sh)，自动识别 Linux x64 / ARM64，从本仓库 Releases 查找最新稳定 PG17 便携版，下载并核对 GitHub 附件哈希及 SHA-256 文件，校验包内版本记录，然后初始化数据库、安装并启用 `pg_duckdb` / `pg_durable`、创建普通应用角色，配置并启动 systemd 服务。默认仅监听 `127.0.0.1:5432`。脚本不会编译源码或触发 GitHub Actions。
+
+在目标服务器执行：
+
+```bash
+curl --fail --location --retry 3 \
+  https://raw.githubusercontent.com/deluxebear/postgres/custom-extensions/scripts/portable/install.sh \
+  -o install-portable-postgres.sh
+sudo bash install-portable-postgres.sh
+
+# 可选：自定义端口、固定稳定版（首次安装时选择，不是升级命令）
+# sudo bash install-portable-postgres.sh --port 55432 --version 17.12.0.005-cli
+```
+
+要求 root/sudo、运行中的 systemd、glibc ≥ 2.39、Python ≥ 3.12；基线环境为 Ubuntu 24.04，不支持原生 Alpine/musl。需要预先有 curl 用于下载脚本；安装器缺少其他依赖时会使用 apt-get 或 dnf 安装，不安装发行版 PostgreSQL。其他发行版仍需确认兼容性。脚本在安装前检查端口，并对已有数据、配置、服务或 current 链接直接报错，**不会覆盖或升级现有数据库**。重复执行也不会重新初始化。若失败，停止并禁用本次创建的服务，保留数据、程序和凭据供排查，不自动清空目录。
+
+程序和数据目录与下方手动步骤相同。随机管理员密码保存在 root 专用的 `/etc/portable-postgres/worker.env`，用于后台连接；应用角色为 `portable_app`，其随机密码和连接参数保存在 `/etc/portable-postgres/app.env`，两个文件权限均为 `0600`。安装器不会打印密码，可通过 `sudo cat /etc/portable-postgres/app.env` 查看应用凭据；不要把管理员密码交给应用。
+
+安装成功前会检查数据库就绪、实际扩展版本、DuckDB 查询，并通过 TCP/SCRAM 以普通角色执行一个返回 `42` 的 durable 工作流。该完成工作流会保留为安装检查记录。密钥持久化在 `/var/lib/postgresql/portable/keys/pgsodium.key`，请随备份方案保存。连接与服务管理：
+
+```bash
+/opt/portable-postgres/current/bin/psql -W \
+  -h 127.0.0.1 -p 5432 -U portable_app -d postgres
+sudo systemctl status portable-postgres --no-pager
+sudo journalctl -u portable-postgres -n 100 --no-pager
+```
+
+以下为对应的**手动安装步骤**；已经运行一键安装器的服务器无需再执行。
+
 以下以 **Ubuntu 24.04、systemd、全新数据目录**为例，安装已发布的 `17.12.0.005-cli`。适用于 x86_64 / ARM64，不需要 Docker 或 Nix；其他发行版需自行确认 glibc 和动态加载器兼容性。先确认本机 `5432` 端口未被其他 PostgreSQL 实例占用。下列命令由具有 sudo 权限的用户执行；只在目标服务器上执行，不是仓库构建步骤。
 
 **1. 下载、校验并安装程序。** 固定版本便于复现；以后更换版本时同时调整 tag 和文件名，不自动覆盖正在运行的程序。
