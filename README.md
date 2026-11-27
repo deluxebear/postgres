@@ -214,6 +214,8 @@ sudo systemctl status portable-postgres --no-pager
 sudo journalctl -u portable-postgres -n 100 --no-pager
 ```
 
+安装器专用的 `.github/workflows/portable-installer-check.yml` 只提供手动触发的脚本检查，覆盖语法、ShellCheck、参数和权限保护，以及模拟下载中的稳定版筛选、完整性校验和安全解包；不构建 PostgreSQL、不实际安装服务、不发布包。该检查不能替代目标服务器上的安装及运行检查。
+
 以下为对应的**手动安装步骤**；已经运行一键安装器的服务器无需再执行。
 
 以下以 **Ubuntu 24.04、systemd、全新数据目录**为例，安装已发布的 `17.12.0.005-cli`。适用于 x86_64 / ARM64，不需要 Docker 或 Nix；其他发行版需自行确认 glibc 和动态加载器兼容性。先确认本机 `5432` 端口未被其他 PostgreSQL 实例占用。下列命令由具有 sudo 权限的用户执行；只在目标服务器上执行，不是仓库构建步骤。

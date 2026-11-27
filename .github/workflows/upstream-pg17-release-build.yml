@@ -7,8 +7,10 @@ on:
     # Portable CLI workflow, tests and documentation do not change Docker packages.
     paths-ignore:
       - '.github/workflows/cli-release.yml'
+      - '.github/workflows/portable-installer-check.yml'
       - 'scripts/portable/**'
       - 'tests/test_portable_release.py'
+      - 'tests/test_portable_installer.py'
       - '**/*.md'
   workflow_dispatch:
     inputs:
