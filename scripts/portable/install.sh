@@ -52,7 +52,8 @@ while [[ $# -gt 0 ]]; do
     *) die "未知参数：$1" ;;
   esac
 done
-[[ $port =~ ^[1-9][0-9]{0,4}$ ]] && ((port <= 65535)) || die '端口必须为 1–65535 的整数'
+if [[ ! $port =~ ^[1-9][0-9]{0,4}$ ]]; then die '端口必须为 1–65535 的整数'; fi
+if ((port > 65535)); then die '端口必须为 1–65535 的整数'; fi
 if [[ -n "$requested_version" ]]; then
   requested_version=${requested_version#postgres-}
   [[ $requested_version =~ ^17\.[0-9]+\.[0-9]+\.[0-9]+-cli$ ]] || die '只接受稳定 PG17 CLI 版本号'
